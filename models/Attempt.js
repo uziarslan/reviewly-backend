@@ -88,5 +88,7 @@ const attemptSchema = new mongoose.Schema(
 );
 
 attemptSchema.index({ user: 1, reviewer: 1, status: 1 });
+// Unique constraint: one attempt per user per reviewer
+attemptSchema.index({ user: 1, reviewer: 1 }, { unique: true });
 
 module.exports = mongoose.model("Attempt", attemptSchema);

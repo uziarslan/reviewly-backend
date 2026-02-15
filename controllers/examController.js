@@ -72,42 +72,15 @@ exports.startExam = async (req, res, next) => {
         .json({ success: false, message: "Reviewer has no exam config" });
     }
 
-    let questionIds = [];
-
-    // ── Fixed exam (demo) ──────────────────────────
-    if (cfg.variant === "fixed") {
-      // For fixed exams, load the same questions every time.
-      // We select them deterministically based on section distribution.
-      const existing = await Attempt.findOne({
-        reviewer: reviewer._id,
-        status: { $ne: "in_progress" },
-      })
-        .sort({ createdAt: -1 })
-        .select("questions");
-
-      if (existing && existing.questions.length > 0) {
-        // Reuse same question set from previous attempt
-        questionIds = existing.questions;
-      } else {
-        // First time: select fixed set
-        const selected = await assembleDynamic(cfg);
-        questionIds = selected.map((q) => q._id);
-      }
-    } else {
-      // ── Dynamic exam ──────────────────────────────
-      const selected = await assembleDynamic(cfg);
-      questionIds = selected.map((q) => q._id);
-    }
-
-    // Check if user already has an in_progress attempt for this reviewer
+    // ── Single-entry logic: one attempt per user + reviewer ──
+    // Use findOne to check existing attempt
     let attempt = await Attempt.findOne({
       user: req.user._id,
       reviewer: reviewer._id,
-      status: "in_progress",
     });
 
-    if (attempt) {
-      // Return existing in-progress attempt
+    // If in_progress, resume
+    if (attempt && attempt.status === "in_progress") {
       await attempt.populate("questions");
       return res.json({
         success: true,
@@ -116,18 +89,96 @@ exports.startExam = async (req, res, next) => {
       });
     }
 
-    // Create new attempt
-    attempt = await Attempt.create({
-      user: req.user._id,
-      reviewer: reviewer._id,
+    // Need new questions for first attempt or reattempt
+    let questionIds = [];
+
+    if (cfg.variant === "fixed") {
+      // Fixed exams reuse the same questions
+      if (attempt && attempt.questions.length > 0) {
+        questionIds = attempt.questions;
+      } else {
+        const selected = await assembleDynamic(cfg);
+        questionIds = selected.map((q) => q._id);
+      }
+    } else {
+      // Dynamic: new questions each attempt
+      const selected = await assembleDynamic(cfg);
+      questionIds = selected.map((q) => q._id);
+    }
+
+    const answersArray = questionIds.map((qId) => ({
+      question: qId,
+      selectedAnswer: null,
+      isCorrect: false,
+    }));
+
+    const resetData = {
       questions: questionIds,
-      answers: questionIds.map((qId) => ({
-        question: qId,
-        selectedAnswer: null,
-        isCorrect: false,
-      })),
+      answers: answersArray,
+      status: "in_progress",
+      currentIndex: 0,
+      startedAt: new Date(),
+      submittedAt: null,
       remainingSeconds: cfg.timeLimitSeconds || null,
-    });
+      result: {
+        totalItems: 0,
+        correct: 0,
+        incorrect: 0,
+        unanswered: 0,
+        percentage: 0,
+        passed: false,
+        passingScore: null,
+        sectionScores: [],
+        strengths: [],
+        improvements: [],
+        aiSummary: null,
+      },
+    };
+
+    if (attempt) {
+      // Reattempt: update existing record atomically
+      attempt = await Attempt.findOneAndUpdate(
+        { user: req.user._id, reviewer: reviewer._id },
+        { $set: resetData },
+        { new: true }
+      ).populate("questions");
+
+      if (!attempt) {
+        return res.status(500).json({ success: false, message: "Failed to update attempt" });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: formatAttemptForClient(attempt),
+      });
+    }
+
+    // First attempt: create new record with upsert to handle race conditions
+    try {
+      attempt = await Attempt.create({
+        user: req.user._id,
+        reviewer: reviewer._id,
+        ...resetData,
+      });
+    } catch (err) {
+      // Handle duplicate key error (race condition)
+      if (err.code === 11000) {
+        // Another request created it, fetch and return
+        attempt = await Attempt.findOne({
+          user: req.user._id,
+          reviewer: reviewer._id,
+        }).populate("questions");
+        
+        if (attempt) {
+          return res.json({
+            success: true,
+            message: "Resuming existing attempt",
+            data: formatAttemptForClient(attempt),
+          });
+        }
+      }
+      throw err;
+    }
 
     await attempt.populate("questions");
 
@@ -519,7 +570,7 @@ exports.getUserAttempts = async (req, res, next) => {
     const attempts = await Attempt.find({ user: req.user._id })
       .populate("reviewer", "title slug type")
       .select(
-        "reviewer status result.percentage result.passed currentIndex answers.selectedAnswer questions createdAt submittedAt"
+        "reviewer status result.percentage result.passed result.correct result.totalItems currentIndex answers.selectedAnswer questions createdAt submittedAt remainingSeconds"
       )
       .sort({ createdAt: -1 })
       .lean();
