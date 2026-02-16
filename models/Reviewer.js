@@ -101,7 +101,19 @@ const reviewerSchema = new mongoose.Schema(
       itemsCount: { type: Number },
       progress: { type: String, default: "Not Started" },
       bannerImage: { type: String, default: null },
+      // Intro text (before coverage): short tagline + full paragraph
+      introShort: { type: String, default: null },
+      introFull: { type: String, default: null },
+      // Applicability (e.g. "Professional & Sub-Professional")
+      applicableFor: { type: String, default: null },
+      accessFor: { type: String, default: null },
       coverage: [coverageItemSchema],
+      //Coverage end text
+      coverageEndText: { type: String, default: null },
+      // Text after coverage (e.g. difficulty note)
+      difficultyText: { type: String, default: null },
+      // Disclaimer at the end
+      disclaimer: { type: String, default: null },
       importantNotes: [importantNoteSchema],
     },
   },
