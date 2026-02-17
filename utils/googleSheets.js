@@ -4,9 +4,12 @@ const path = require("path");
 const SHEETS_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"];
 
 function getSheetsAuth() {
-  const keyFilePath = path.join(__dirname, "..", "config", "google-service-account.json");
+  const authConfig = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+    ? { credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON) }
+    : { keyFile: path.join(__dirname, "..", "config", "google-service-account.json") };
+
   return new google.auth.GoogleAuth({
-    keyFile: keyFilePath,
+    ...authConfig,
     scopes: SHEETS_SCOPE,
   });
 }
