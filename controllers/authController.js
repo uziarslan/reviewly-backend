@@ -179,9 +179,13 @@ exports.googleCodeLogin = async (req, res, next) => {
     });
   } catch (err) {
     if (err.message === "invalid_request") {
+      const usedRedirectUri =
+        (clientRedirectUri && typeof clientRedirectUri === "string" && clientRedirectUri) ||
+        redirectUri;
       return res.status(400).json({
         success: false,
-        message: "Google sign-in failed: redirect_uri mismatch or code already used. Ensure your frontend sends redirect_uri and it matches the URL in Google Cloud Console.",
+        message: "Add this exact URL in Google Cloud Console → APIs & Services → Credentials → your OAuth 2.0 Client → Authorized redirect URIs",
+        redirect_uri: usedRedirectUri || undefined,
       });
     }
     next(err);
