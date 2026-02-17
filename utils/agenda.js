@@ -7,8 +7,34 @@ let agenda = null;
  * Initialize Agenda with MongoDB client
  */
 function initAgenda(mongoDb) {
+  const agendaConfig = process.env.MONGO_URI
+    ? {
+        db: {
+          address: process.env.MONGO_URI,
+          collection: "agendaJobs",
+        },
+      }
+    : { mongo: mongoDb };
+
   agenda = new Agenda({
-    mongo: mongoDb,
+    ...agendaConfig,
+    processEvery: "5 seconds",
+  });
+
+  agenda.on("ready", () => {
+    console.log("✅ Agenda ready");
+  });
+
+  agenda.on("error", (err) => {
+    console.error("❌ Agenda error:", err.message);
+  });
+
+  agenda.on("start", (job) => {
+    console.log(`▶️ Job started: ${job.attrs.name}`);
+  });
+
+  agenda.on("complete", (job) => {
+    console.log(`✅ Job completed: ${job.attrs.name}`);
   });
 
   /**
@@ -45,9 +71,13 @@ async function startAgenda() {
     await agenda.start();
     console.log("✅ Agenda started");
 
+    // Cancel any stale jobs from previous runs before rescheduling
+    await agenda.cancel({ name: "sync-questions-from-sheet" });
+
     // Schedule the sync job to run every 12 hours
-    await agenda.every("12 hours", "sync-questions-from-sheet");
-    console.log("📅 Scheduled: sync-questions-from-sheet every 12 hours");
+    const syncInterval = process.env.AGENDA_SYNC_INTERVAL || "12 hours";
+    await agenda.every(syncInterval, "sync-questions-from-sheet");
+    console.log(`📅 Scheduled: sync-questions-from-sheet every ${syncInterval}`);
   } catch (err) {
     console.error("❌ Error starting Agenda:", err.message);
   }
