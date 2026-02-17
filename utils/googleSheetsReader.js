@@ -53,7 +53,15 @@ async function getSheetData({ spreadsheetId, sheetName }) {
   const data = rows.slice(1).map((row) => {
     const obj = {};
     headers.forEach((header, index) => {
-      obj[header.toLowerCase().replace(/\s+/g, "_")] = row[index] || "";
+      // Normalize: lowercase, strip non-alphanumeric (except _), collapse underscores
+      const key = header
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_|_$/g, "");
+      obj[key] = row[index] || "";
     });
     return obj;
   });

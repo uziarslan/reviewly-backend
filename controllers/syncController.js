@@ -24,7 +24,7 @@ const COLUMN_MAPPING = {
   status: "status",
   batch_id: "batchId",
   source: "source",
-  note: "note",
+  note_gemini_validation: "note",
 };
 
 /**
@@ -45,19 +45,11 @@ function convertSheetRowToDBFormat(sheetRow) {
 }
 
 /**
- * Check if two objects have differences (only check fields that have values in sheet)
+ * Check if two objects have differences (compare converted DB-keyed data against DB doc)
  */
-function hasChanges(sheetData, dbData) {
-  // Only check fields that are actually provided in the sheet data (have non-empty values)
-  Object.entries(sheetData).forEach(([sheetKey, sheetVal]) => {
-    if (!sheetVal || String(sheetVal).trim() === "") {
-      delete sheetData[sheetKey]; // Remove empty fields from consideration
-    }
-  });
-
-  for (const [sheetKey, sheetVal] of Object.entries(sheetData)) {
-    const dbKey = COLUMN_MAPPING[sheetKey];
-    if (!dbKey || dbKey === "_id") continue;
+function hasChanges(convertedData, dbData) {
+  for (const [dbKey, sheetVal] of Object.entries(convertedData)) {
+    if (dbKey === "_id") continue;
 
     const sheetValue = String(sheetVal || "").trim();
     const dbValue = String(dbData[dbKey] || "").trim();
