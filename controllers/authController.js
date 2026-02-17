@@ -84,13 +84,13 @@ exports.googleLogin = async (req, res, next) => {
 
 /**
  * POST /api/auth/google/code
- * Body: { code }   – the authorization code from Google OAuth redirect
+ * Body: { code, redirect_uri? }   – code from Google; redirect_uri should match the one used in the auth request (send from frontend to avoid env mismatch in production).
  *
  * Exchanges the code for tokens, verifies the user, creates if first login, returns JWT.
  */
 exports.googleCodeLogin = async (req, res, next) => {
   try {
-    const { code } = req.body;
+    const { code, redirect_uri: clientRedirectUri } = req.body;
 
     if (!code) {
       return res
@@ -98,8 +98,31 @@ exports.googleCodeLogin = async (req, res, next) => {
         .json({ success: false, message: "Authorization code is required" });
     }
 
+    let redirectUri;
+    if (clientRedirectUri && typeof clientRedirectUri === "string") {
+      try {
+        const parsed = new URL(clientRedirectUri);
+        if (parsed.pathname !== "/auth/google/callback" && !parsed.pathname.endsWith("/auth/google/callback")) {
+          return res.status(400).json({ success: false, message: "Invalid redirect_uri path" });
+        }
+        redirectUri = clientRedirectUri;
+      } catch (_) {
+        return res.status(400).json({ success: false, message: "Invalid redirect_uri" });
+      }
+    } else {
+      redirectUri =
+        process.env.GOOGLE_REDIRECT_URI ||
+        `${(process.env.DOMAIN_FRONTEND || process.env.CLIENT_URL || "").replace(/\/$/, "")}/auth/google/callback`;
+      if (!redirectUri || redirectUri.includes("undefined")) {
+        return res.status(500).json({
+          success: false,
+          message: "Server misconfiguration: set GOOGLE_REDIRECT_URI or DOMAIN_FRONTEND (or CLIENT_URL) to your frontend URL, e.g. https://your-app.vercel.app",
+        });
+      }
+    }
+
     // Exchange the authorization code for tokens
-    const { tokens } = await client.getToken(code);
+    const { tokens } = await client.getToken({ code, redirect_uri: redirectUri });
     const idToken = tokens.id_token;
 
     // Verify the ID token
@@ -155,6 +178,12 @@ exports.googleCodeLogin = async (req, res, next) => {
       },
     });
   } catch (err) {
+    if (err.message === "invalid_request") {
+      return res.status(400).json({
+        success: false,
+        message: "Google sign-in failed: redirect_uri mismatch or code already used. Ensure your frontend sends redirect_uri and it matches the URL in Google Cloud Console.",
+      });
+    }
     next(err);
   }
 };
