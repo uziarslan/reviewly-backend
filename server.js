@@ -18,8 +18,11 @@ connectDB().then((db) => {
 const app = express();
 
 // ── Middleware ───────────────────────────────────
+// DOMAIN_FRONTEND can be a single URL or comma-separated list (e.g. https://reviewly.ph,https://www.reviewly.ph)
 const allowedOrigins = [
-  process.env.DOMAIN_FRONTEND || "http://localhost:3000",
+  ...(process.env.DOMAIN_FRONTEND
+    ? process.env.DOMAIN_FRONTEND.split(",").map((s) => s.trim()).filter(Boolean)
+    : ["http://localhost:3000"]),
   process.env.DOMAIN_ADMIN || "http://localhost:3001",
 ].filter(Boolean);
 
