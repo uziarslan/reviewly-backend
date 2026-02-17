@@ -89,16 +89,15 @@ exports.googleLogin = async (req, res, next) => {
  * Exchanges the code for tokens, verifies the user, creates if first login, returns JWT.
  */
 exports.googleCodeLogin = async (req, res, next) => {
+  const { code, redirect_uri: clientRedirectUri } = req.body || {};
+  let redirectUri;
   try {
-    const { code, redirect_uri: clientRedirectUri } = req.body;
-
     if (!code) {
       return res
         .status(400)
         .json({ success: false, message: "Authorization code is required" });
     }
 
-    let redirectUri;
     if (clientRedirectUri && typeof clientRedirectUri === "string") {
       try {
         const parsed = new URL(clientRedirectUri);
