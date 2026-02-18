@@ -2,31 +2,27 @@ const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
 
-const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || `${process.env.CLIENT_URL}/auth/google/callback`
-);
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 /**
- * POST /api/auth/google
- * Body: { credential }   – the Google ID-token from the frontend
+ * POST /api/auth/google-login
+ * Body: { token }   – the Google ID-token (credential) from the frontend
  *
  * Verifies the Google token, creates user if first login, returns JWT.
  */
 exports.googleLogin = async (req, res, next) => {
   try {
-    const { credential } = req.body;
+    const { token } = req.body;
 
-    if (!credential) {
+    if (!token) {
       return res
         .status(400)
-        .json({ success: false, message: "Google credential is required" });
+        .json({ success: false, message: "Google token is required" });
     }
 
     // Verify the token with Google
     const ticket = await client.verifyIdToken({
-      idToken: credential,
+      idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
 
@@ -52,10 +48,10 @@ exports.googleLogin = async (req, res, next) => {
     }
 
     // Generate JWT
-    const token = generateToken(user._id);
+    const jwtToken = generateToken(user._id);
 
     // Set cookie (httpOnly for security)
-    res.cookie("token", token, {
+    res.cookie("token", jwtToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
@@ -64,7 +60,7 @@ exports.googleLogin = async (req, res, next) => {
 
     res.json({
       success: true,
-      token,
+      token: jwtToken,
       user: {
         _id: user._id,
         firstName: user.firstName,
@@ -81,116 +77,6 @@ exports.googleLogin = async (req, res, next) => {
     next(err);
   }
 };
-
-/**
- * POST /api/auth/google/code
- * Body: { code, redirect_uri? }   – code from Google; redirect_uri should match the one used in the auth request (send from frontend to avoid env mismatch in production).
- *
- * Exchanges the code for tokens, verifies the user, creates if first login, returns JWT.
- */
-exports.googleCodeLogin = async (req, res, next) => {
-  const { code, redirect_uri: clientRedirectUri } = req.body || {};
-  let redirectUri;
-  try {
-    if (!code) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Authorization code is required" });
-    }
-
-    if (clientRedirectUri && typeof clientRedirectUri === "string") {
-      try {
-        const parsed = new URL(clientRedirectUri);
-        if (parsed.pathname !== "/auth/google/callback" && !parsed.pathname.endsWith("/auth/google/callback")) {
-          return res.status(400).json({ success: false, message: "Invalid redirect_uri path" });
-        }
-        redirectUri = clientRedirectUri;
-      } catch (_) {
-        return res.status(400).json({ success: false, message: "Invalid redirect_uri" });
-      }
-    } else {
-      redirectUri =
-        process.env.GOOGLE_REDIRECT_URI ||
-        `${(process.env.DOMAIN_FRONTEND || process.env.CLIENT_URL || "").replace(/\/$/, "")}/auth/google/callback`;
-      if (!redirectUri || redirectUri.includes("undefined")) {
-        return res.status(500).json({
-          success: false,
-          message: "Server misconfiguration: set GOOGLE_REDIRECT_URI or DOMAIN_FRONTEND (or CLIENT_URL) to your frontend URL, e.g. https://your-app.vercel.app",
-        });
-      }
-    }
-
-    // Exchange the authorization code for tokens
-    const { tokens } = await client.getToken({ code, redirect_uri: redirectUri });
-    const idToken = tokens.id_token;
-
-    // Verify the ID token
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
-
-    const payload = ticket.getPayload();
-    const { sub: googleId, email, given_name, family_name, picture } = payload;
-
-    // Find or create user
-    let user = await User.findOne({ googleId });
-
-    if (!user) {
-      user = await User.create({
-        googleId,
-        firstName: given_name || "",
-        lastName: family_name || "",
-        email,
-        profilePic: picture || "",
-        isAdmin: false,
-      });
-    } else {
-      user.profilePic = picture || user.profilePic;
-      await user.save();
-    }
-
-    // Generate JWT
-    const token = generateToken(user._id);
-
-    // Set cookie
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    res.json({
-      success: true,
-      token,
-      user: {
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        profilePic: user.profilePic,
-        isAdmin: user.isAdmin,
-        library: user.library,
-        subscription: user.subscription,
-        marketingEmails: user.marketingEmails,
-      },
-    });
-  } catch (err) {
-    if (err.message === "invalid_request") {
-      const usedRedirectUri =
-        (clientRedirectUri && typeof clientRedirectUri === "string" && clientRedirectUri) ||
-        redirectUri;
-      return res.status(400).json({
-        success: false,
-        message: "Add this exact URL in Google Cloud Console → APIs & Services → Credentials → your OAuth 2.0 Client → Authorized redirect URIs",
-        redirect_uri: usedRedirectUri || undefined,
-      });
-    }
-    next(err);
-  }
-};
-
 /**
  * GET /api/auth/me
  * Returns the currently authenticated user.
