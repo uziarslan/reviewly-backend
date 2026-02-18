@@ -2,10 +2,14 @@ const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
 
+// TODO: remove hardcoded secret; use GOOGLE_CLIENT_SECRET in env only
+const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET || "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";
+
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const oauthClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
+  GOOGLE_CLIENT_SECRET,
   "postmessage"
 );
 
@@ -101,7 +105,7 @@ exports.googleCodeLogin = async (req, res, next) => {
         .json({ success: false, message: "Google code is required" });
     }
 
-    if (!process.env.GOOGLE_CLIENT_SECRET) {
+    if (!GOOGLE_CLIENT_SECRET) {
       return res.status(500).json({
         success: false,
         message: "Server is missing GOOGLE_CLIENT_SECRET",
