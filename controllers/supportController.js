@@ -11,16 +11,16 @@ const PUBLIC_CATEGORY_MAP = {
   "Payments & Subscription": "payment",
   "Feedback or Feature Request": "feedback",
   "Bug or Technical Issue": "bug",
-  Other: "other",
+  "Other": "other",
 };
 
 const IN_APP_CATEGORY_MAP = {
-  "Account & Login": "account",
-  "Subscription & Payment": "payment",
-  "Reviewer / Exam Content": "content",
+  "General Inquiry": "general",
+  "Pricing & Plans": "pricing",
+  "Payments & Subscription": "payment",
   "Feedback or Feature Request": "feedback",
   "Bug or Technical Issue": "bug",
-  Other: "other",
+  "Other": "other",
 };
 
 function clean(value) {

@@ -6,9 +6,7 @@ const Reviewer = require("../models/Reviewer");
  */
 exports.getAllReviewers = async (_req, res, next) => {
   try {
-    const reviewers = await Reviewer.find({ status: "published" }).sort({
-      createdAt: 1,
-    });
+    const reviewers = await Reviewer.find({ status: "published" }).sort({ order: 1 });
     res.json({ success: true, count: reviewers.length, data: reviewers });
   } catch (err) {
     next(err);

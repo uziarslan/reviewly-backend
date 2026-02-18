@@ -59,6 +59,8 @@ const reviewerSchema = new mongoose.Schema(
       enum: ["draft", "published", "archived"],
       default: "published",
     },
+    // Display order (0, 1, 2...). Lower = first. Missing values sort last.
+    order: { type: Number, default: 0 },
     // ── Exam-specific config (used by exam assembly) ──
     examConfig: {
       // exam variant: dynamic = new questions each attempt; fixed = same set
