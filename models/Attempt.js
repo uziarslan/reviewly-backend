@@ -32,6 +32,14 @@ const sectionScoreSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const sectionAnalysisSchema = new mongoose.Schema(
+  {
+    section: { type: String, required: true },
+    lines: [{ type: String }],
+  },
+  { _id: false }
+);
+
 const attemptSchema = new mongoose.Schema(
   {
     user: {
@@ -82,6 +90,10 @@ const attemptSchema = new mongoose.Schema(
       strengths: [{ type: String }],
       improvements: [{ type: String }],
       aiSummary: { type: String, default: null },
+      quickSummary: { type: String, default: null },
+      performanceLevel: { type: String, default: null }, // Strong / Developing / Needs Improvement (practice exams)
+      timeInsight: { type: String, default: null }, // AI-generated pacing insight (practice exams)
+      sectionAnalysis: [sectionAnalysisSchema],
     },
   },
   { timestamps: true }

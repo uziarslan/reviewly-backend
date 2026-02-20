@@ -411,6 +411,18 @@ exports.submitExam = async (req, res, next) => {
 
     attempt.status = "submitted";
     attempt.submittedAt = new Date();
+
+    // Determine exam type from reviewer
+    const examType = attempt.reviewer?.type || "mock"; // mock | practice | demo
+
+    // Compute performance level for practice exams
+    let performanceLevel = null;
+    if (examType === "practice") {
+      if (percentage >= 85) performanceLevel = "Strong";
+      else if (percentage >= 70) performanceLevel = "Developing";
+      else performanceLevel = "Needs Improvement";
+    }
+
     attempt.result = {
       totalItems,
       correct: totalCorrect,
@@ -422,20 +434,46 @@ exports.submitExam = async (req, res, next) => {
       sectionScores,
       strengths,
       improvements,
+      performanceLevel,
     };
 
     // Optional AI analysis (Gemini free tier)
     try {
+      // Compute time spent for practice exams
+      const timeSpentSeconds = attempt.submittedAt && attempt.startedAt
+        ? Math.round((attempt.submittedAt - new Date(attempt.startedAt)) / 1000)
+        : null;
+
+      // For practice exams, determine the single section name
+      const sectionName = examType === "practice" && sectionScores.length > 0
+        ? sectionScores[0].section
+        : null;
+
       const aiAnalysis = await generateGeminiAnalysis({
         totalItems,
         correct: totalCorrect,
         percentage,
         sectionScores,
+        passed,
+        passingThreshold,
+        examType,
+        unanswered: totalUnanswered,
+        timeSpentSeconds,
+        sectionName,
       });
       if (aiAnalysis) {
-        attempt.result.strengths = aiAnalysis.strengths;
-        attempt.result.improvements = aiAnalysis.improvements;
-        attempt.result.aiSummary = aiAnalysis.summary || null;
+        if (examType === "practice") {
+          // Practice: store quick summary + time insight only
+          attempt.result.quickSummary = aiAnalysis.quickSummary || null;
+          attempt.result.timeInsight = aiAnalysis.timeInsight || null;
+        } else {
+          // Mock/demo: store full analysis
+          attempt.result.strengths = aiAnalysis.strengths;
+          attempt.result.improvements = aiAnalysis.improvements;
+          attempt.result.aiSummary = aiAnalysis.summary || null;
+          attempt.result.quickSummary = aiAnalysis.quickSummary || null;
+          attempt.result.sectionAnalysis = aiAnalysis.sectionAnalysis || [];
+        }
       }
     } catch (err) {
       // Keep fallback strengths/improvements
@@ -548,7 +586,7 @@ exports.getAttemptResult = async (req, res, next) => {
       _id: attemptId,
       user: req.user._id,
     })
-      .populate("reviewer", "title slug examConfig")
+      .populate("reviewer", "title slug type examConfig logo details")
       .select("-questions");
 
     if (!attempt) {

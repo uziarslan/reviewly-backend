@@ -7,7 +7,7 @@ try {
 
 const DEFAULT_MODEL = "gemini-1.5-flash-002";
 
-function buildPrompt({ totalItems, correct, percentage, sectionScores }) {
+function buildPrompt({ totalItems, correct, percentage, sectionScores, passed, passingThreshold }) {
   const sections = sectionScores.map((s) => ({
     section: s.section,
     totalItems: s.totalItems,
@@ -17,17 +17,92 @@ function buildPrompt({ totalItems, correct, percentage, sectionScores }) {
     score: s.score,
   }));
 
+  // Sort sections by score to identify strong/weak areas
+  const sorted = [...sections].sort((a, b) => b.score - a.score);
+  const strongSections = sorted.slice(0, 2).map((s) => s.section);
+  const weakestSection = sorted[sorted.length - 1]?.section || "";
+
   return [
-    "You are an exam coach. Analyze the user's test performance.",
-    "Return ONLY valid JSON with this shape:",
-    "{\"strengths\":[string,string,string],\"improvements\":[string,string,string,string],\"summary\":string}",
-    "Guidelines:",
+    "You are an exam coach for a Civil Service Exam reviewer app called Reviewly.",
+    "Analyze the user's test performance and return ONLY valid JSON (no markdown, no extra keys).",
+    "",
+    "Return JSON with this exact shape:",
+    "{",
+    '  "quickSummary": "string - 2-3 sentences summarizing overall performance. Mention which sections were strong, which need work. Supportive and diagnostic tone.",',
+    '  "sectionAnalysis": [',
+    '    {',
+    '      "section": "string - exact section name from input",',
+    '      "lines": ["string - first descriptive line about performance", "string - second line with actionable advice"]',
+    '    }',
+    "  ],",
+    '  "strengths": ["string", "string", "string"],',
+    '  "improvements": ["string", "string", "string", "string"],',
+    '  "summary": "string - 2-3 sentences, encouraging, actionable"',
+    "}",
+    "",
+    "Guidelines for sectionAnalysis:",
+    "- Provide exactly one entry per section from the input data.",
+    "- Each entry must have exactly 2 lines (short, specific, actionable).",
+    `- For strong sections (${strongSections.join(", ")}): praise specific skills, mention exam-readiness.`,
+    `- For the weakest section (${weakestSection}): mention it had the biggest impact on overall score, suggest specific practice areas.`,
+    "- For mid-range sections: acknowledge progress, suggest targeted refinement.",
+    "- Tone: calm, supportive, professional, encouraging. Never say 'you will fail'.",
+    "",
+    "Guidelines for strengths/improvements/summary (backward compat):",
     "- Strengths: 2-3 short, specific skill or section names.",
     "- Improvements: 3-4 short, specific skill or section names.",
     "- Summary: 2-3 sentences, encouraging, actionable.",
-    "- No extra keys, no markdown.",
-    "\nPerformance data:",
-    JSON.stringify({ totalItems, correct, percentage, sections }),
+    "",
+    "Performance data:",
+    JSON.stringify({
+      totalItems,
+      correct,
+      percentage,
+      passed: passed != null ? passed : undefined,
+      passingThreshold: passingThreshold || undefined,
+      sections,
+    }),
+  ].join("\n");
+}
+
+function buildPracticePrompt({ totalItems, correct, percentage, unanswered, timeSpentSeconds, sectionName }) {
+  const avgTimePerQ = totalItems > 0 && timeSpentSeconds ? Math.round(timeSpentSeconds / totalItems) : null;
+  let performanceLevel = 'Needs Improvement';
+  if (percentage >= 85) performanceLevel = 'Strong';
+  else if (percentage >= 70) performanceLevel = 'Developing';
+
+  return [
+    "You are an exam coach for a Civil Service Exam reviewer app called Reviewly.",
+    `The user just completed a section practice exam for: ${sectionName}.`,
+    "This is a single-section practice exam with 50 items. It is NOT a full mock exam.",
+    "Return ONLY valid JSON (no markdown, no extra keys).",
+    "",
+    "Return JSON with this exact shape:",
+    "{",
+    '  "quickSummary": "string - 2-3 short sentences about the user\'s performance in this specific section. Mention specific skills tested (e.g., computation, word problems, grammar, patterns). Supportive and focused tone. Do NOT mention other sections.",',
+    '  "timeInsight": "string - one sentence about pacing based on unanswered count. If 0 unanswered: good pacing. If 1-2: slight pacing issue. If 3+: pacing needs work."',
+    "}",
+    "",
+    "Guidelines:",
+    `- Performance level: ${performanceLevel}`,
+    "- If Strong (85%+): praise consistency, mention exam-readiness for this section.",
+    "- If Developing (70-84%): acknowledge progress, suggest specific refinement areas.",
+    "- If Needs Improvement (<70%): be encouraging, mention structured practice and pacing.",
+    "- Keep it short, 2-3 lines max for quickSummary.",
+    "- Tone: calm, supportive, professional. Never say 'you will fail'.",
+    "",
+    "Performance data:",
+    JSON.stringify({
+      sectionName,
+      totalItems,
+      correct,
+      incorrect: totalItems - correct - (unanswered || 0),
+      unanswered: unanswered || 0,
+      percentage,
+      performanceLevel,
+      timeSpentSeconds: timeSpentSeconds || null,
+      avgTimePerQuestion: avgTimePerQ,
+    }),
   ].join("\n");
 }
 
@@ -39,12 +114,15 @@ function safeParseJson(text) {
   }
 }
 
-async function generateGeminiAnalysis({ totalItems, correct, percentage, sectionScores }) {
+async function generateGeminiAnalysis({ totalItems, correct, percentage, sectionScores, passed, passingThreshold, examType, unanswered, timeSpentSeconds, sectionName }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || !GoogleGenerativeAI) return null;
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const prompt = buildPrompt({ totalItems, correct, percentage, sectionScores });
+  const isPractice = examType === 'practice';
+  const prompt = isPractice
+    ? buildPracticePrompt({ totalItems, correct, percentage, unanswered, timeSpentSeconds, sectionName })
+    : buildPrompt({ totalItems, correct, percentage, sectionScores, passed, passingThreshold });
 
   const candidates = [
     process.env.GEMINI_MODEL,
@@ -71,6 +149,22 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
     }
   }
 
+  // For practice exams, different validation
+  if (isPractice) {
+    if (!parsed || typeof parsed.quickSummary !== "string") {
+      return null;
+    }
+    return {
+      quickSummary: parsed.quickSummary,
+      timeInsight: typeof parsed.timeInsight === "string" ? parsed.timeInsight : null,
+      // Provide empty defaults for backward compat fields
+      strengths: [],
+      improvements: [],
+      summary: null,
+      sectionAnalysis: [],
+    };
+  }
+
   if (!parsed || !Array.isArray(parsed.strengths) || !Array.isArray(parsed.improvements)) {
     return null;
   }
@@ -79,6 +173,13 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
     strengths: parsed.strengths.slice(0, 3),
     improvements: parsed.improvements.slice(0, 4),
     summary: typeof parsed.summary === "string" ? parsed.summary : null,
+    quickSummary: typeof parsed.quickSummary === "string" ? parsed.quickSummary : null,
+    sectionAnalysis: Array.isArray(parsed.sectionAnalysis)
+      ? parsed.sectionAnalysis.map((sa) => ({
+          section: sa.section || "",
+          lines: Array.isArray(sa.lines) ? sa.lines.slice(0, 3) : [],
+        }))
+      : [],
   };
 }
 
