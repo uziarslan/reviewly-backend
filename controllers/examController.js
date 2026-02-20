@@ -2,6 +2,7 @@ const Reviewer = require("../models/Reviewer");
 const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
 const { generateGeminiAnalysis } = require("../utils/gemini");
+const { generateRecommendations, populateRecommendationReviewers } = require("../utils/recommendations");
 
 // ─── helpers ──────────────────────────────────────
 
@@ -479,6 +480,26 @@ exports.submitExam = async (req, res, next) => {
       // Keep fallback strengths/improvements
       console.error("Gemini analysis failed:", err.message || err);
     }
+
+    // Generate recommended next steps (backend-driven)
+    try {
+      const allReviewers = await Reviewer.find({
+        status: "published",
+        type: { $in: ["practice", "mock"] },
+      })
+        .select("title type logo details examConfig access")
+        .lean();
+      const rec = generateRecommendations({
+        examType,
+        result: attempt.result,
+        currentReviewer: attempt.reviewer,
+        allReviewers,
+      });
+      attempt.result.recommendedNextStep = rec;
+    } catch (err) {
+      console.error("Recommendations generation failed:", err.message || err);
+    }
+
     attempt.markModified("answers");
 
     const updated = await Attempt.findOneAndUpdate(
@@ -495,21 +516,46 @@ exports.submitExam = async (req, res, next) => {
     );
 
     if (!updated) {
-      const existing = await Attempt.findById(attemptId);
+      const existing = await Attempt.findById(attemptId).lean();
+      const existingResult = existing?.result || attempt.result;
+      let resultToSend = existingResult;
+      if (existingResult?.recommendedNextStep?.ctas?.length) {
+        const populatedCtas = await populateRecommendationReviewers(
+          existingResult.recommendedNextStep.ctas,
+          Reviewer
+        );
+        resultToSend = {
+          ...existingResult,
+          recommendedNextStep: { ...existingResult.recommendedNextStep, ctas: populatedCtas },
+        };
+      }
       return res.json({
         success: true,
         data: {
           attemptId: existing?._id || attemptId,
-          result: existing?.result || attempt.result,
+          result: resultToSend,
         },
       });
     }
 
+    const rawResult = updated.result;
+    const plainResult = typeof rawResult?.toObject === "function" ? rawResult.toObject() : rawResult;
+    let resultToSend = plainResult;
+    if (plainResult?.recommendedNextStep?.ctas?.length) {
+      const populatedCtas = await populateRecommendationReviewers(
+        plainResult.recommendedNextStep.ctas,
+        Reviewer
+      );
+      resultToSend = {
+        ...plainResult,
+        recommendedNextStep: { ...plainResult.recommendedNextStep, ctas: populatedCtas },
+      };
+    }
     res.json({
       success: true,
       data: {
         attemptId: updated._id,
-        result: updated.result,
+        result: resultToSend,
       },
     });
   } catch (err) {
@@ -587,10 +633,43 @@ exports.getAttemptResult = async (req, res, next) => {
       user: req.user._id,
     })
       .populate("reviewer", "title slug type examConfig logo details")
-      .select("-questions");
+      .select("-questions")
+      .lean();
 
     if (!attempt) {
       return res.status(404).json({ success: false, message: "Attempt not found" });
+    }
+
+    // Backward compatibility: generate recommendations on-the-fly if missing
+    if (attempt.result && !attempt.result.recommendedNextStep?.ctas?.length) {
+      try {
+        const allReviewers = await Reviewer.find({
+          status: "published",
+          type: { $in: ["practice", "mock"] },
+        })
+          .select("title type logo details examConfig access")
+          .lean();
+        const rec = generateRecommendations({
+          examType: attempt.reviewer?.type || "mock",
+          result: attempt.result,
+          currentReviewer: attempt.reviewer,
+          allReviewers,
+        });
+        if (!attempt.result.recommendedNextStep) {
+          attempt.result.recommendedNextStep = {};
+        }
+        attempt.result.recommendedNextStep.ctas = rec.ctas;
+      } catch (err) {
+        console.error("Recommendations fallback failed:", err.message || err);
+      }
+    }
+
+    // Populate reviewer data for CTAs (fetched by reviewerId at read time)
+    if (attempt.result?.recommendedNextStep?.ctas?.length) {
+      attempt.result.recommendedNextStep.ctas = await populateRecommendationReviewers(
+        attempt.result.recommendedNextStep.ctas,
+        Reviewer
+      );
     }
 
     res.json({ success: true, data: attempt });

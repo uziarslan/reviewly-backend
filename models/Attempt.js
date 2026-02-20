@@ -94,6 +94,30 @@ const attemptSchema = new mongoose.Schema(
       performanceLevel: { type: String, default: null }, // Strong / Developing / Needs Improvement (practice exams)
       timeInsight: { type: String, default: null }, // AI-generated pacing insight (practice exams)
       sectionAnalysis: [sectionAnalysisSchema],
+      // Backend-generated recommended next steps (CTAs)
+      recommendedNextStep: {
+        ctas: [
+          {
+            type: {
+              type: String,
+              enum: [
+                "take_section_practice",
+                "retake_full_mock",
+                "retake_section",
+                "review_answers",
+                "try_full_mock",
+                "go_to_dashboard",
+                "upgrade_premium",
+                "retake_demo",
+              ],
+            },
+            label: { type: String },
+            reviewerId: { type: mongoose.Schema.Types.ObjectId },
+            isHighestImpact: { type: Boolean, default: false },
+            priority: { type: String },
+          },
+        ],
+      },
     },
   },
   { timestamps: true }
