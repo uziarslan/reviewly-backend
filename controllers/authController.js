@@ -2,9 +2,7 @@ const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
 
-// TODO: remove hardcoded secret; use GOOGLE_CLIENT_SECRET in env only
-const GOOGLE_CLIENT_SECRET =
-  process.env.GOOGLE_CLIENT_SECRET || "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";
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const oauthClient = new OAuth2Client(

@@ -1,4 +1,5 @@
 const { appendSheetRow, getNextTicketId } = require("../utils/googleSheets");
+const { sendSupportNotification } = require("../utils/mailtrap");
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -61,12 +62,13 @@ exports.submitContact = async (req, res, next) => {
     const sheetName = process.env.GOOGLE_SHEETS_SHEET_NAME || "Reviewly –SupportLog";
 
     const ticketId = await getNextTicketId({ spreadsheetId, sheetName });
+    const createdAt = nowIso();
     const categoryRaw = clean(category);
     const categoryInternal = PUBLIC_CATEGORY_MAP[categoryRaw] || "other";
 
     const values = [
       ticketId,
-      nowIso(),
+      createdAt,
       "public",
       categoryRaw,
       categoryInternal,
@@ -84,6 +86,23 @@ exports.submitContact = async (req, res, next) => {
       sheetName,
       values,
     });
+
+    try {
+      await sendSupportNotification({
+        ticketId,
+        createdAt,
+        source: "public",
+        category: categoryRaw,
+        email: clean(email),
+        firstName: clean(firstName),
+        lastName: clean(lastName),
+        userId: "",
+        planType: "",
+        message: clean(message),
+      });
+    } catch (emailErr) {
+      console.error("Mailtrap support notification failed:", emailErr?.message || emailErr);
+    }
 
     return res.json({ success: true });
   } catch (err) {
@@ -116,12 +135,13 @@ exports.submitHelp = async (req, res, next) => {
     const sheetName = process.env.GOOGLE_SHEETS_SHEET_NAME || "Reviewly –SupportLog";
 
     const ticketId = await getNextTicketId({ spreadsheetId, sheetName });
+    const createdAt = nowIso();
     const categoryRaw = clean(category);
     const categoryInternal = IN_APP_CATEGORY_MAP[categoryRaw] || "other";
 
     const values = [
       ticketId,
-      nowIso(),
+      createdAt,
       "in_app",
       categoryRaw,
       categoryInternal,
@@ -139,6 +159,23 @@ exports.submitHelp = async (req, res, next) => {
       sheetName,
       values,
     });
+
+    try {
+      await sendSupportNotification({
+        ticketId,
+        createdAt,
+        source: "in_app",
+        category: categoryRaw,
+        email: userEmail,
+        firstName: "",
+        lastName: "",
+        userId,
+        planType,
+        message: clean(message),
+      });
+    } catch (emailErr) {
+      console.error("Mailtrap support notification failed:", emailErr?.message || emailErr);
+    }
 
     return res.json({ success: true });
   } catch (err) {
