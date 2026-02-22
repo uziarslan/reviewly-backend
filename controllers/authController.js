@@ -11,6 +11,35 @@ const oauthClient = new OAuth2Client(
   "postmessage"
 );
 
+const PREMIUM_WEEKLY_EMAILS = new Set([
+  "rubielabajo093@gmail.com",
+  "edwardcuyos8022@gmail.com",
+  "estradasarahg4@gmail.com",
+  "tanauanrose6@gmail.com",
+  "marizabasillote@gmail.com",
+  "kkstormrage11@gmail.com",
+  "johnmichaelvigil0329@gmail.com",
+  "nakiecyelko5@gmail.com",
+  "jessicabmagbuhos@gmail.com",
+  "monalindaalarba20@gmail.com",
+  "janicepeninoy674@gmail.com",
+  "pikachu4841097@gmail.com",
+  "maorilanz18@gmail.com",
+  "alamanvivian777@gmail.com",
+  "ashleymariejacob14@gmail.com",
+  "carmina.laurilla@gmail.com",
+  "sahbuenaventura@gmail.com",
+  "bornokpapaw@gmail.com",
+  "abegailmarzan130@gmail.com",
+  "danicakatedomanais@gmail.com",
+  "hawkdo169@gmail.com",
+  "evalyn.bautista05@gmail.com",
+  "kristelann.mones@gmail.com",
+  "garciajoycemae@gmail.com",
+  "esperejanelle8@gmail.com",
+  "santosjochelle619@gmail.com",
+]);
+
 async function loginFromIdToken({ idToken }) {
   const ticket = await client.verifyIdToken({
     idToken,
@@ -19,6 +48,10 @@ async function loginFromIdToken({ idToken }) {
 
   const payload = ticket.getPayload();
   const { sub: googleId, email, given_name, family_name, picture } = payload;
+  const normalizedEmail = (email || "").toLowerCase().trim();
+  const shouldGrantWeekly = PREMIUM_WEEKLY_EMAILS.has(normalizedEmail);
+  const now = new Date();
+  const weeklyExpiry = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
   let user = await User.findOne({ googleId });
 
@@ -27,9 +60,12 @@ async function loginFromIdToken({ idToken }) {
       googleId,
       firstName: given_name || "",
       lastName: family_name || "",
-      email,
+      email: normalizedEmail,
       profilePic: picture || "",
       isAdmin: false,
+      subscription: shouldGrantWeekly
+        ? { plan: "weekly", startDate: now, expiresAt: weeklyExpiry }
+        : undefined,
     });
   } else {
     user.profilePic = picture || user.profilePic;
