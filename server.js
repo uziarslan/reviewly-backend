@@ -5,6 +5,7 @@ const cookieParser = require("cookie-parser");
 const connectDB = require("./config/db");
 const { initAgenda, startAgenda, stopAgenda, triggerSync } = require("./utils/agenda");
 const { syncQuestionsFromSheet } = require("./controllers/syncController");
+const posthog = require("./services/posthog");
 
 // ── Connect to MongoDB ──────────────────────────
 let mongoDb = null;
@@ -123,6 +124,7 @@ const server = app.listen(PORT, async () => {
 // ── Graceful shutdown ───────────────────────────
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received, shutting down gracefully...");
+  await posthog.shutdown();
   await stopAgenda();
   server.close(() => {
     console.log("Server closed");
@@ -132,6 +134,7 @@ process.on("SIGTERM", async () => {
 
 process.on("SIGINT", async () => {
   console.log("SIGINT received, shutting down gracefully...");
+  await posthog.shutdown();
   await stopAgenda();
   server.close(() => {
     console.log("Server closed");

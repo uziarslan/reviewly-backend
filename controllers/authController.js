@@ -1,6 +1,7 @@
 const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
+const posthog = require("../services/posthog");
 
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
@@ -73,6 +74,20 @@ async function loginFromIdToken({ idToken }) {
   }
 
   const jwtToken = generateToken(user._id);
+
+  // Server-side PostHog identification + login event
+  posthog.identify(user._id, {
+    email: user.email,
+    first_name: user.firstName || given_name,
+    last_name: user.lastName || family_name,
+    plan_type: user.subscription?.plan || "free",
+    signup_date: user.createdAt,
+  });
+  posthog.capture(user._id, "login_success", {
+    email: user.email,
+    plan_type: user.subscription?.plan || "free",
+    login_method: "google",
+  });
 
   return { user, jwtToken };
 }
