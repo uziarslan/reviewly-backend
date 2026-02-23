@@ -3,6 +3,13 @@ const Attempt = require("../models/Attempt");
 const Reviewer = require("../models/Reviewer");
 const { hogqlQuery } = require("../services/posthog");
 
+const POSTHOG_PERSONAL_API_KEY = process.env.POSTHOG_PERSONAL_API_KEY;
+const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID;
+
+function posthogConfigured() {
+  return !!(POSTHOG_PERSONAL_API_KEY && POSTHOG_PROJECT_ID);
+}
+
 // ── Helper: date range from query params ────────
 function getDateRange(req) {
   const days = parseInt(req.query.days) || 30;
@@ -17,6 +24,14 @@ function getDateRange(req) {
  */
 exports.getOverview = async (req, res, next) => {
   try {
+    if (!posthogConfigured()) {
+      return res.json({
+        success: true,
+        data: {},
+        message:
+          "Admin analytics are not configured on this server. Set POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID to enable analytics.",
+      });
+    }
     const { start } = getDateRange(req);
 
     const [
@@ -110,6 +125,9 @@ exports.getOverview = async (req, res, next) => {
  */
 exports.getExamAnalytics = async (req, res, next) => {
   try {
+    if (!posthogConfigured()) {
+      return res.json({ success: true, data: [], message: 'Admin analytics not configured.' });
+    }
     const { start } = getDateRange(req);
 
     const examStats = await Attempt.aggregate([
@@ -209,6 +227,9 @@ exports.getExamAnalytics = async (req, res, next) => {
  */
 exports.getUserAnalytics = async (req, res, next) => {
   try {
+    if (!posthogConfigured()) {
+      return res.json({ success: true, data: {}, message: 'Admin analytics not configured.' });
+    }
     const { start, days } = getDateRange(req);
 
     // Signups over time (grouped by day)
@@ -300,6 +321,21 @@ exports.getUserAnalytics = async (req, res, next) => {
  */
 exports.getRetentionAnalytics = async (req, res, next) => {
   try {
+    if (!posthogConfigured()) {
+      // Return basic MongoDB-derived retention data as empty to avoid errors when PostHog keys are missing
+      return res.json({
+        success: true,
+        data: {
+          totalActiveUsers: 0,
+          returningUsers: 0,
+          returningRate: 0,
+          avgAttemptsPerUser: 0,
+          topUsers: [],
+          loginFrequency: null,
+        },
+        message: 'Admin analytics not configured.',
+      });
+    }
     const { start } = getDateRange(req);
 
     // Users with multiple attempts (returning users)
@@ -409,6 +445,14 @@ exports.getRetentionAnalytics = async (req, res, next) => {
  */
 exports.getPostHogInsights = async (req, res, next) => {
   try {
+    if (!posthogConfigured()) {
+      return res.json({
+        success: true,
+        data: null,
+        message:
+          'PostHog personal API key or project ID is not configured on the server. Set POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID to enable this endpoint.',
+      });
+    }
     const { query, limit } = req.query;
     if (!query) {
       return res
