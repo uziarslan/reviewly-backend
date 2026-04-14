@@ -6,6 +6,8 @@ require("dotenv").config();
 const mongoose = require("mongoose");
 const connectDB = require("../config/db");
 const Reviewer = require("../models/Reviewer");
+const { getRedis } = require("../config/redis");
+const { invalidateReviewerCache } = require("../controllers/reviewerController");
 
 const IMPORTANT_NOTES = [
   { title: "⏱️ Time Management is Key", text: "The exam is 3 hours and 10 minutes long. Use your time wisely—pace yourself and avoid spending too long on any single question." },
@@ -311,6 +313,8 @@ async function seed() {
   console.log("📝  Inserting reviewers...");
   const docs = await Reviewer.insertMany(REVIEWERS);
   console.log(`✅  ${docs.length} reviewers seeded successfully!`);
+
+  await invalidateReviewerCache(getRedis(), null);
 
   // Print ID mapping so frontend can reference them
   console.log("\n📋  Reviewer ID mapping:");

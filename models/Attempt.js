@@ -94,6 +94,11 @@ const attemptSchema = new mongoose.Schema(
       performanceLevel: { type: String, default: null }, // Strong / Developing / Needs Improvement (practice exams)
       timeInsight: { type: String, default: null }, // AI-generated pacing insight (practice exams)
       sectionAnalysis: [sectionAnalysisSchema],
+      aiStatus: {
+        type: String,
+        enum: ["pending", "processing", "complete", "failed"],
+        default: null,
+      },
       // Backend-generated recommended next steps (CTAs)
       recommendedNextStep: {
         ctas: [
@@ -119,6 +124,8 @@ const attemptSchema = new mongoose.Schema(
         ],
       },
     },
+    // Public share token (generated on demand)
+    shareToken: { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -126,5 +133,6 @@ const attemptSchema = new mongoose.Schema(
 attemptSchema.index({ user: 1, reviewer: 1, status: 1 });
 // Unique constraint: one attempt per user per reviewer
 attemptSchema.index({ user: 1, reviewer: 1 }, { unique: true });
+attemptSchema.index({ shareToken: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("Attempt", attemptSchema);

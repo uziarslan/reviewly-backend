@@ -1,8 +1,11 @@
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+const logger = require("../utils/logger");
 const Reviewer = require("../models/Reviewer");
 const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
-const { generateGeminiAnalysis } = require("../utils/gemini");
 const { generateRecommendations, populateRecommendationReviewers } = require("../utils/recommendations");
+const { enqueueExamAIAnalysis } = require("../utils/agenda");
 
 // ─── helpers ──────────────────────────────────────
 
@@ -303,6 +306,55 @@ exports.saveAnswer = async (req, res, next) => {
 };
 
 /**
+ * POST /api/exams/attempts/:attemptId/beacon
+ * No protect middleware — token is in body (sendBeacon cannot set headers).
+ * Body: { token, answers: { [questionIndex]: selectedAnswer } }
+ */
+exports.beaconSave = async (req, res) => {
+  try {
+    const token = req.body?.token;
+    if (!token) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (_) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    const userId = decoded.id;
+    const { attemptId } = req.params;
+    const answersMap = req.body?.answers;
+    if (!answersMap || typeof answersMap !== "object") {
+      return res.status(400).json({ success: false, message: "Invalid request" });
+    }
+
+    const attempt = await Attempt.findOne({
+      _id: attemptId,
+      user: userId,
+      status: "in_progress",
+    });
+
+    if (!attempt) {
+      return res.status(404).json({ success: false, message: "Attempt not found or already submitted" });
+    }
+
+    for (const [questionIndexStr, selectedAnswer] of Object.entries(answersMap)) {
+      const questionIndex = parseInt(questionIndexStr, 10);
+      if (Number.isNaN(questionIndex) || questionIndex < 0 || questionIndex >= attempt.answers.length) continue;
+      attempt.answers[questionIndex].selectedAnswer = selectedAnswer || null;
+    }
+    attempt.markModified("answers");
+    await attempt.save();
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    logger.error({ err }, "beaconSave error");
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
  * PUT /api/exams/attempts/:attemptId/pause
  * Body: { remainingSeconds, currentIndex }
  */
@@ -436,50 +488,9 @@ exports.submitExam = async (req, res, next) => {
       strengths,
       improvements,
       performanceLevel,
+      duration: durationSeconds,
+      aiStatus: "pending",
     };
-
-    // Optional AI analysis (Gemini free tier)
-    try {
-      // Compute time spent for practice exams
-      const timeSpentSeconds = attempt.submittedAt && attempt.startedAt
-        ? Math.round((attempt.submittedAt - new Date(attempt.startedAt)) / 1000)
-        : null;
-
-      // For practice exams, determine the single section name
-      const sectionName = examType === "practice" && sectionScores.length > 0
-        ? sectionScores[0].section
-        : null;
-
-      const aiAnalysis = await generateGeminiAnalysis({
-        totalItems,
-        correct: totalCorrect,
-        percentage,
-        sectionScores,
-        passed,
-        passingThreshold,
-        examType,
-        unanswered: totalUnanswered,
-        timeSpentSeconds,
-        sectionName,
-      });
-      if (aiAnalysis) {
-        if (examType === "practice") {
-          // Practice: store quick summary + time insight only
-          attempt.result.quickSummary = aiAnalysis.quickSummary || null;
-          attempt.result.timeInsight = aiAnalysis.timeInsight || null;
-        } else {
-          // Mock/demo: store full analysis
-          attempt.result.strengths = aiAnalysis.strengths;
-          attempt.result.improvements = aiAnalysis.improvements;
-          attempt.result.aiSummary = aiAnalysis.summary || null;
-          attempt.result.quickSummary = aiAnalysis.quickSummary || null;
-          attempt.result.sectionAnalysis = aiAnalysis.sectionAnalysis || [];
-        }
-      }
-    } catch (err) {
-      // Keep fallback strengths/improvements
-      console.error("Gemini analysis failed:", err.message || err);
-    }
 
     // Generate recommended next steps (backend-driven)
     try {
@@ -497,7 +508,7 @@ exports.submitExam = async (req, res, next) => {
       });
       attempt.result.recommendedNextStep = rec;
     } catch (err) {
-      console.error("Recommendations generation failed:", err.message || err);
+      logger.error({ err }, "Recommendations generation failed");
     }
 
     attempt.markModified("answers");
@@ -551,6 +562,9 @@ exports.submitExam = async (req, res, next) => {
         recommendedNextStep: { ...plainResult.recommendedNextStep, ctas: populatedCtas },
       };
     }
+    enqueueExamAIAnalysis(updated._id).catch((err) =>
+      logger.error({ err }, "Failed to enqueue AI analysis")
+    );
     res.json({
       success: true,
       data: {
@@ -598,6 +612,8 @@ exports.getAttemptReview = async (req, res, next) => {
       explanationWrong: q.explanationWrong,
       reviewlyTip: q.reviewlyTip,
       section: q.section,
+      module: q.module,
+      topic: q.topic,
       selectedAnswer: attempt.answers[idx]?.selectedAnswer || null,
       isCorrect: attempt.answers[idx]?.isCorrect || false,
     }));
@@ -610,6 +626,7 @@ exports.getAttemptReview = async (req, res, next) => {
           _id: attempt.reviewer._id,
           title: attempt.reviewer.title,
           slug: attempt.reviewer.slug,
+          type: attempt.reviewer.type,
         },
         result: attempt.result,
         questions,
@@ -660,7 +677,7 @@ exports.getAttemptResult = async (req, res, next) => {
         }
         attempt.result.recommendedNextStep.ctas = rec.ctas;
       } catch (err) {
-        console.error("Recommendations fallback failed:", err.message || err);
+        logger.error({ err }, "Recommendations fallback failed");
       }
     }
 
@@ -680,17 +697,26 @@ exports.getAttemptResult = async (req, res, next) => {
 
 /**
  * GET /api/exams/attempts/user/history
- * Returns all past attempts for the current user.
+ * Returns past attempts for the current user (paginated).
  */
 exports.getUserAttempts = async (req, res, next) => {
   try {
-    const attempts = await Attempt.find({ user: req.user._id })
-      .populate("reviewer", "title slug type")
-      .select(
-        "reviewer status result.percentage result.passed result.correct result.totalItems currentIndex answers.selectedAnswer questions createdAt submittedAt remainingSeconds"
-      )
-      .sort({ createdAt: -1 })
-      .lean();
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const filter = { user: req.user._id };
+
+    const [attempts, total] = await Promise.all([
+      Attempt.find(filter)
+        .populate("reviewer", "title slug type")
+        .select(
+          "reviewer status result.percentage result.passed result.correct result.totalItems currentIndex answers.selectedAnswer questions createdAt submittedAt remainingSeconds"
+        )
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Attempt.countDocuments(filter),
+    ]);
 
     // Attach lightweight progress info for in-progress attempts
     const withProgress = attempts.map((a) => {
@@ -715,7 +741,16 @@ exports.getUserAttempts = async (req, res, next) => {
       return a;
     });
 
-    res.json({ success: true, data: withProgress });
+    res.json({
+      success: true,
+      data: withProgress,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit) || 1,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -802,6 +837,76 @@ exports.getReviewerProgress = async (req, res, next) => {
           totalItems: a.result?.totalItems || 0,
           submittedAt: a.submittedAt,
         })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── Share ─────────────────────────────────────────────────────────
+
+/**
+ * POST /api/exams/attempts/:attemptId/share
+ * Generate (or return existing) share token for an attempt.
+ */
+exports.generateShareLink = async (req, res, next) => {
+  try {
+    const { attemptId } = req.params;
+
+    const attempt = await Attempt.findOne({
+      _id: attemptId,
+      user: req.user._id,
+      status: { $in: ["submitted", "timed_out"] },
+    });
+
+    if (!attempt) {
+      return res.status(404).json({ success: false, message: "Attempt not found" });
+    }
+
+    if (!attempt.shareToken) {
+      attempt.shareToken = crypto.randomBytes(16).toString("hex");
+      await attempt.save();
+    }
+
+    res.json({ success: true, shareToken: attempt.shareToken });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/exams/shared/:shareToken
+ * Public endpoint — no auth required.
+ * Returns a limited view of the attempt result for sharing.
+ */
+exports.getSharedResult = async (req, res, next) => {
+  try {
+    const { shareToken } = req.params;
+
+    if (!shareToken || shareToken.length !== 32) {
+      return res.status(400).json({ success: false, message: "Invalid share token" });
+    }
+
+    const attempt = await Attempt.findOne({ shareToken })
+      .populate("reviewer", "title type examConfig")
+      .select("reviewer result submittedAt shareToken")
+      .lean();
+
+    if (!attempt) {
+      return res.status(404).json({ success: false, message: "Shared result not found" });
+    }
+
+    // Strip AI/internal fields – return only what the public card needs
+    const { sectionScores, percentage, passed, correct, totalItems, duration, passingScore } =
+      attempt.result || {};
+
+    res.json({
+      success: true,
+      data: {
+        reviewer: attempt.reviewer,
+        submittedAt: attempt.submittedAt,
+        result: { sectionScores, percentage, passed, correct, totalItems, duration, passingScore },
       },
     });
   } catch (err) {
