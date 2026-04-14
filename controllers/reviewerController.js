@@ -27,7 +27,7 @@ exports.getAllReviewers = async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
-    const filter = { status: "published" };
+    const filter = { status: "published", type: { $ne: "trial_assessment" } };
 
     const redis = getRedis();
     const cacheKey = `${KEY_ALL}:${page}:${limit}`;

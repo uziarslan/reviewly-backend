@@ -9,6 +9,7 @@
     "seed:reviewers": "node seeds/seedReviewers.js",
     "seed:questions": "node seeds/seedQuestions.js",
     "seed:admin": "node seeds/seedAdmin.js",
+    "seed:trial": "node seeds/seedTrialAssessment.js",
     "seed:all": "node seeds/seedAll.js"
   },
   "dependencies": {

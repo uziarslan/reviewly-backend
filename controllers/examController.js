@@ -69,6 +69,13 @@ exports.startExam = async (req, res, next) => {
         .json({ success: false, message: "Reviewer not found" });
     }
 
+    // Block trial_assessment from the normal exam flow
+    if (reviewer.type === "trial_assessment") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Use the trial assessment endpoint" });
+    }
+
     const cfg = reviewer.examConfig;
     if (!cfg) {
       return res
@@ -718,8 +725,13 @@ exports.getUserAttempts = async (req, res, next) => {
       Attempt.countDocuments(filter),
     ]);
 
+    // Exclude trial_assessment attempts from history
+    const filtered = attempts.filter(
+      (a) => a.reviewer?.type !== "trial_assessment"
+    );
+
     // Attach lightweight progress info for in-progress attempts
-    const withProgress = attempts.map((a) => {
+    const withProgress = filtered.map((a) => {
       const totalQuestions = a.questions?.length || 0;
       if (a.status === "in_progress") {
         const answeredCount = a.answers

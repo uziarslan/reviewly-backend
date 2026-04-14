@@ -27,7 +27,7 @@ const reviewerSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["mock", "practice", "demo"],
+      enum: ["mock", "practice", "demo", "trial_assessment"],
       required: true,
     },
     access: {

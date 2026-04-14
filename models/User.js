@@ -67,6 +67,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Whether user has completed/skipped the one-time trial assessment
+    trialAssessment: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
