@@ -90,8 +90,9 @@ exports.startExam = async (req, res, next) => {
       reviewer: reviewer._id,
     });
 
-    // If in_progress, resume
-    if (attempt && attempt.status === "in_progress") {
+    // If in_progress and not a restart, resume
+    const forceRestart = req.body?.restart === true;
+    if (!forceRestart && attempt && attempt.status === "in_progress") {
       await attempt.populate("questions");
       return res.json({
         success: true,
@@ -471,6 +472,10 @@ exports.submitExam = async (req, res, next) => {
 
     attempt.status = "submitted";
     attempt.submittedAt = new Date();
+
+    const durationSeconds = attempt.startedAt
+      ? Math.round((attempt.submittedAt - new Date(attempt.startedAt)) / 1000)
+      : null;
 
     // Determine exam type from reviewer
     const examType = attempt.reviewer?.type || "mock"; // mock | practice | demo
