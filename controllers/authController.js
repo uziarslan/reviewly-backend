@@ -131,6 +131,7 @@ exports.googleLogin = async (req, res, next) => {
         library: user.library,
         subscription: user.subscription,
         marketingEmails: user.marketingEmails,
+        trialAssessment: user.trialAssessment,
       },
     });
   } catch (err) {
@@ -193,6 +194,7 @@ exports.googleCodeLogin = async (req, res, next) => {
         library: user.library,
         subscription: user.subscription,
         marketingEmails: user.marketingEmails,
+        trialAssessment: user.trialAssessment,
       },
     });
   } catch (err) {
