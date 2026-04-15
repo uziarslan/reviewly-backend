@@ -269,6 +269,7 @@ exports.startTrialExam = async (req, res, next) => {
 exports.submitTrialExam = async (req, res, next) => {
   try {
     const { attemptId } = req.params;
+    const submittedRemainingSeconds = req.body?.remainingSeconds;
 
     const attempt = await Attempt.findOne({
       _id: attemptId,
@@ -335,6 +336,23 @@ exports.submitTrialExam = async (req, res, next) => {
       ? parseFloat(((totalCorrect / totalItems) * 100).toFixed(2))
       : 0;
 
+    if (Number.isFinite(submittedRemainingSeconds)) {
+      attempt.remainingSeconds = Math.max(0, Math.round(submittedRemainingSeconds));
+    }
+
+    const timeLimitSeconds = attempt.reviewer?.examConfig?.timeLimitSeconds;
+    const hasTimeLimit = Number.isFinite(timeLimitSeconds) && timeLimitSeconds > 0;
+
+    let durationSeconds = null;
+    if (hasTimeLimit) {
+      const remaining = Number.isFinite(attempt.remainingSeconds)
+        ? Math.min(timeLimitSeconds, Math.max(0, Math.round(attempt.remainingSeconds)))
+        : timeLimitSeconds;
+      durationSeconds = Math.max(0, Math.round(timeLimitSeconds - remaining));
+    } else if (attempt.startedAt) {
+      durationSeconds = Math.round((Date.now() - new Date(attempt.startedAt).getTime()) / 1000);
+    }
+
     // Determine performance level
     let performanceLevel = null;
     if (percentage >= 85) performanceLevel = "Strong";
@@ -362,6 +380,7 @@ exports.submitTrialExam = async (req, res, next) => {
             strengths,
             improvements,
             performanceLevel,
+            duration: durationSeconds,
             aiStatus: null,
           },
         },
@@ -388,6 +407,7 @@ exports.submitTrialExam = async (req, res, next) => {
           strengths,
           improvements,
           performanceLevel,
+          duration: durationSeconds,
         },
       },
     });

@@ -402,6 +402,7 @@ exports.pauseExam = async (req, res, next) => {
 exports.submitExam = async (req, res, next) => {
   try {
     const { attemptId } = req.params;
+    const submittedRemainingSeconds = req.body?.remainingSeconds;
 
     const attempt = await Attempt.findOne({
       _id: attemptId,
@@ -473,9 +474,22 @@ exports.submitExam = async (req, res, next) => {
     attempt.status = "submitted";
     attempt.submittedAt = new Date();
 
-    const durationSeconds = attempt.startedAt
-      ? Math.round((attempt.submittedAt - new Date(attempt.startedAt)) / 1000)
-      : null;
+    if (Number.isFinite(submittedRemainingSeconds)) {
+      attempt.remainingSeconds = Math.max(0, Math.round(submittedRemainingSeconds));
+    }
+
+    const timeLimitSeconds = attempt.reviewer?.examConfig?.timeLimitSeconds;
+    const hasTimeLimit = Number.isFinite(timeLimitSeconds) && timeLimitSeconds > 0;
+
+    let durationSeconds = null;
+    if (hasTimeLimit) {
+      const remaining = Number.isFinite(attempt.remainingSeconds)
+        ? Math.min(timeLimitSeconds, Math.max(0, Math.round(attempt.remainingSeconds)))
+        : timeLimitSeconds;
+      durationSeconds = Math.max(0, Math.round(timeLimitSeconds - remaining));
+    } else if (attempt.startedAt) {
+      durationSeconds = Math.round((attempt.submittedAt - new Date(attempt.startedAt)) / 1000);
+    }
 
     // Determine exam type from reviewer
     const examType = attempt.reviewer?.type || "mock"; // mock | practice | demo
