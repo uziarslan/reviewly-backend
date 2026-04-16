@@ -3,9 +3,7 @@ const rateLimitRedis = require("rate-limit-redis");
 const { getRedis } = require("../config/redis");
 
 const RedisStore = rateLimitRedis.RedisStore || rateLimitRedis.default || rateLimitRedis;
-
 const redisClient = getRedis();
-
 let store = undefined;
 
 if (redisClient) {
@@ -16,13 +14,15 @@ if (redisClient) {
     });
   } catch (err) {
     console.error(
-      "Failed to initialize RedisStore for rate limiting, falling back to in-memory store:",
+      "Failed to initialize RedisStore for rate limiting:",
       err.message
     );
     store = undefined;
   }
 } else {
-  console.warn("Rate limiting using in-memory store; set REDIS_URL/REDIS_TLS_URL for shared limits");
+  console.warn(
+    "Rate limiting using in-memory store; Redis is unavailable or not ready."
+  );
 }
 
 const baseOptions = {

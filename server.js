@@ -5,7 +5,6 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const compression = require("compression");
 const connectDB = require("./config/db");
-const { initAgenda } = require("./utils/agenda");
 const { syncQuestionsFromSheet } = require("./controllers/syncController");
 const posthog = require("./services/posthog");
 const { authLimiter, supportLimiter, apiLimiter } = require("./middleware/rateLimit");
@@ -16,7 +15,6 @@ function ensureDbConnected() {
   if (!dbReadyPromise) {
     dbReadyPromise = connectDB()
       .then((db) => {
-        initAgenda(db);
         logger.info("MongoDB instance acquired");
         return db;
       })

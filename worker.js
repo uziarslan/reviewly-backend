@@ -8,6 +8,7 @@ let shuttingDown = false;
 
 async function startWorker() {
   try {
+    logger.info("Starting Agenda worker process");
     const mongoDb = await connectDB();
     initAgenda(mongoDb);
     await startAgenda({ withRecurringSync: true });

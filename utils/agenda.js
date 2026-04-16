@@ -15,14 +15,23 @@ function initAgenda(mongoDb) {
     return agenda;
   }
 
-  const agendaConfig = process.env.MONGO_URI
+  const agendaConfig = mongoDb
+    ? {
+        mongo: mongoDb,
+        collection: "agendaJobs",
+      }
+    : process.env.MONGO_URI
     ? {
         db: {
           address: process.env.MONGO_URI,
           collection: "agendaJobs",
         },
       }
-    : { mongo: mongoDb };
+    : null;
+
+  if (!agendaConfig) {
+    throw new Error("Agenda requires a MongoDB connection or MONGO_URI.");
+  }
 
   agenda = new Agenda({
     ...agendaConfig,
