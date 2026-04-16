@@ -180,7 +180,7 @@ exports.startExam = async (req, res, next) => {
           user: req.user._id,
           reviewer: reviewer._id,
         }).populate("questions");
-        
+
         if (attempt) {
           return res.json({
             success: true,
@@ -841,9 +841,9 @@ exports.getReviewerProgress = async (req, res, next) => {
     const avgScore =
       totalAttempts > 0
         ? Math.round(
-            completed.reduce((sum, a) => sum + (a.result?.percentage || 0), 0) /
-              totalAttempts
-          )
+          completed.reduce((sum, a) => sum + (a.result?.percentage || 0), 0) /
+          totalAttempts
+        )
         : null;
     const passCount = completed.filter((a) => a.result?.passed).length;
 
