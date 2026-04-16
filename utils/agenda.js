@@ -17,17 +17,17 @@ function initAgenda(mongoDb) {
 
   const agendaConfig = mongoDb
     ? {
-        mongo: mongoDb,
-        collection: "agendaJobs",
-      }
+      mongo: mongoDb,
+      collection: "agendaJobs",
+    }
     : process.env.MONGO_URI
-    ? {
+      ? {
         db: {
           address: process.env.MONGO_URI,
           collection: "agendaJobs",
         },
       }
-    : null;
+      : null;
 
   if (!agendaConfig) {
     throw new Error("Agenda requires a MongoDB connection or MONGO_URI.");
@@ -172,7 +172,7 @@ async function startAgenda(options = {}) {
     withRecurringSync = false,
     syncInterval = process.env.AGENDA_SYNC_INTERVAL || "12 hours",
   } = options;
-  
+
   startPromise = (async () => {
     try {
       await agenda.start();
@@ -199,7 +199,7 @@ async function startAgenda(options = {}) {
  */
 async function stopAgenda() {
   if (!agenda) return;
-  
+
   try {
     await agenda.stop();
     startPromise = null;
@@ -217,7 +217,7 @@ async function triggerSync() {
     logger.error("Agenda not initialized");
     return;
   }
-  
+
   try {
     await agenda.now("sync-questions-from-sheet");
     logger.info("Manual sync triggered");
