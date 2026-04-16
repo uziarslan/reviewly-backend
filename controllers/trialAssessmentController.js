@@ -75,6 +75,7 @@ function formatAttemptForClient(attempt) {
     choiceC: q.choiceC,
     choiceD: q.choiceD,
     section: q.section,
+    topic: q.topic,
   }));
 
   return {

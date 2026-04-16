@@ -92,6 +92,7 @@ const attemptSchema = new mongoose.Schema(
       aiSummary: { type: String, default: null },
       quickSummary: { type: String, default: null },
       performanceLevel: { type: String, default: null }, // Strong / Developing / Needs Improvement (practice exams)
+      duration: { type: Number, default: null }, // total time spent in seconds
       timeInsight: { type: String, default: null }, // AI-generated pacing insight (practice exams)
       sectionAnalysis: [sectionAnalysisSchema],
       aiStatus: {
@@ -125,7 +126,7 @@ const attemptSchema = new mongoose.Schema(
       },
     },
     // Public share token (generated on demand)
-    shareToken: { type: String, default: null },
+    shareToken: { type: String },
   },
   { timestamps: true }
 );
