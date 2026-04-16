@@ -716,7 +716,22 @@ exports.getAttemptResult = async (req, res, next) => {
       );
     }
 
-    res.json({ success: true, data: attempt });
+    const aiStatus = attempt.result?.aiStatus;
+    let status = "completed";
+
+    if (attempt.status !== "submitted" && attempt.status !== "timed_out") {
+      status = "processing";
+    } else if (aiStatus === "failed") {
+      status = "failed";
+    } else if (aiStatus === "complete") {
+      status = "completed";
+    } else if (["pending", "processing"].includes(aiStatus)) {
+      status = "processing";
+    } else {
+      status = "completed";
+    }
+
+    res.json({ success: true, status, data: attempt });
   } catch (err) {
     next(err);
   }
