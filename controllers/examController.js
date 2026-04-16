@@ -417,6 +417,16 @@ exports.submitExam = async (req, res, next) => {
         .json({ success: false, message: "Attempt not found or already submitted" });
     }
 
+    if (attempt.result?.aiStatus === "complete") {
+      return res.json({
+        success: true,
+        data: {
+          attemptId: attempt._id,
+          result: attempt.result,
+        },
+      });
+    }
+
     // Grade each answer
     const questions = attempt.questions;
     let totalCorrect = 0;
@@ -682,6 +692,20 @@ exports.getAttemptResult = async (req, res, next) => {
 
     if (!attempt) {
       return res.status(404).json({ success: false, message: "Attempt not found" });
+    }
+
+    if (
+      attempt.result &&
+      attempt.result.aiStatus === "complete" &&
+      attempt.status === "submitted"
+    ) {
+      return res.json({
+        success: true,
+        status: "completed",
+        progressStage: "completed",
+        cached: true,
+        data: attempt,
+      });
     }
 
     // Backward compatibility: generate recommendations on-the-fly if missing
