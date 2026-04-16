@@ -718,20 +718,29 @@ exports.getAttemptResult = async (req, res, next) => {
 
     const aiStatus = attempt.result?.aiStatus;
     let status = "completed";
+    let progressStage = "completed";
 
     if (attempt.status !== "submitted" && attempt.status !== "timed_out") {
       status = "processing";
+      progressStage = "saving";
     } else if (aiStatus === "failed") {
       status = "failed";
+      progressStage = "failed";
     } else if (aiStatus === "complete") {
       status = "completed";
-    } else if (["pending", "processing"].includes(aiStatus)) {
+      progressStage = "completed";
+    } else if (aiStatus === "processing") {
       status = "processing";
+      progressStage = "analyzing";
+    } else if (aiStatus === "pending") {
+      status = "processing";
+      progressStage = "finalizing";
     } else {
-      status = "completed";
+      status = "processing";
+      progressStage = "scoring";
     }
 
-    res.json({ success: true, status, data: attempt });
+    res.json({ success: true, status, progressStage, data: attempt });
   } catch (err) {
     next(err);
   }
