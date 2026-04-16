@@ -1,6 +1,8 @@
 const { rateLimit } = require("express-rate-limit");
-const { RedisStore } = require("rate-limit-redis");
+const rateLimitRedis = require("rate-limit-redis");
 const { getRedis } = require("../config/redis");
+
+const RedisStore = rateLimitRedis.RedisStore || rateLimitRedis.default || rateLimitRedis;
 
 const redisClient = getRedis();
 
@@ -13,11 +15,14 @@ if (redisClient) {
         redisClient.call(command, ...args),
     });
   } catch (err) {
-    console.error("Failed to initialize RedisStore for rate limiting:", err.message);
+    console.error(
+      "Failed to initialize RedisStore for rate limiting, falling back to in-memory store:",
+      err.message
+    );
     store = undefined;
   }
 } else {
-  console.warn("Rate limiting using in-memory store — ineffective in cluster mode");
+  console.warn("Rate limiting using in-memory store; set REDIS_URL/REDIS_TLS_URL for shared limits");
 }
 
 const baseOptions = {

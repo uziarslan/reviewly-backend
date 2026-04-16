@@ -5,19 +5,28 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const compression = require("compression");
 const connectDB = require("./config/db");
-const { initAgenda, startAgenda, stopAgenda, triggerSync } = require("./utils/agenda");
+const { initAgenda } = require("./utils/agenda");
 const { syncQuestionsFromSheet } = require("./controllers/syncController");
 const posthog = require("./services/posthog");
 const { authLimiter, supportLimiter, apiLimiter } = require("./middleware/rateLimit");
 
-// ── Connect to MongoDB ──────────────────────────
-let mongoDb = null;
-connectDB().then((db) => {
-  mongoDb = db;
-  logger.info("MongoDB instance acquired");
-}).catch((err) => {
-  logger.error({ err }, "Failed to connect to MongoDB");
-});
+let dbReadyPromise = null;
+
+function ensureDbConnected() {
+  if (!dbReadyPromise) {
+    dbReadyPromise = connectDB()
+      .then((db) => {
+        initAgenda(db);
+        logger.info("MongoDB instance acquired");
+        return db;
+      })
+      .catch((err) => {
+        dbReadyPromise = null;
+        throw err;
+      });
+  }
+  return dbReadyPromise;
+}
 
 const app = express();
 app.set("trust proxy", 1);
@@ -102,12 +111,13 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-// ── Start server (Agenda is started only in primary/cluster or when run directly) ──
+// ── Start server ─────────────────────────────────
 const PORT = process.env.PORT || 5000;
 let server = null;
-let agendaStartedInThisProcess = false;
 
-function startServer() {
+async function startServer() {
+  await ensureDbConnected();
+
   return new Promise((resolve) => {
     server = app.listen(PORT, () => {
       logger.info({ port: PORT }, "Server running");
@@ -116,29 +126,13 @@ function startServer() {
   });
 }
 
-function runDirect() {
-  startServer().then(async () => {
-    const maxRetries = 30;
-    let retries = 0;
-    while (!mongoDb && retries < maxRetries) {
-      logger.info("Waiting for MongoDB connection...");
-      await new Promise((r) => setTimeout(r, 1000));
-      retries++;
-    }
-
-    if (!mongoDb) {
-      logger.error("MongoDB connection failed, skipping Agenda initialization");
-      return;
-    }
-
-    try {
-      initAgenda(mongoDb);
-      await startAgenda();
-      agendaStartedInThisProcess = true;
-    } catch (err) {
-      logger.error({ err }, "Failed to start Agenda");
-    }
-  });
+async function runDirect() {
+  try {
+    await startServer();
+  } catch (err) {
+    logger.error({ err }, "Failed to start server");
+    process.exit(1);
+  }
 }
 
 // ── Graceful shutdown ───────────────────────────
@@ -146,9 +140,6 @@ function registerShutdownHandlers() {
   const shutdown = async () => {
     logger.info("SIGTERM/SIGINT received, shutting down gracefully...");
     await posthog.shutdown();
-    if (agendaStartedInThisProcess) {
-      await stopAgenda();
-    }
     if (server) {
       server.close(() => {
         logger.info("Server closed");
@@ -168,5 +159,5 @@ registerShutdownHandlers();
 if (require.main === module) {
   runDirect();
 } else {
-  module.exports = { app, startServer };
+  module.exports = { app, startServer, ensureDbConnected };
 }

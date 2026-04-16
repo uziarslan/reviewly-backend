@@ -4,7 +4,9 @@
   "description": "Reviewly backend API - Node.js, Express, MongoDB",
   "main": "server.js",
   "scripts": {
-    "start": "node cluster.js",
+    "start": "node server.js",
+    "start:compat": "node cluster.js",
+    "start:worker": "node worker.js",
     "dev": "nodemon server.js",
     "seed:reviewers": "node seeds/seedReviewers.js",
     "seed:questions": "node seeds/seedQuestions.js",

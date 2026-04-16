@@ -5,11 +5,16 @@ const Attempt = require("../models/Attempt");
 const { generateGeminiAnalysis } = require("./gemini");
 
 let agenda = null;
+let startPromise = null;
 
 /**
  * Initialize Agenda with MongoDB client
  */
 function initAgenda(mongoDb) {
+  if (agenda) {
+    return agenda;
+  }
+
   const agendaConfig = process.env.MONGO_URI
     ? {
         db: {
@@ -137,31 +142,47 @@ function initAgenda(mongoDb) {
       job.attrs.failReason = err.message;
     }
   });
+
+  return agenda;
 }
 
 /**
  * Start Agenda and schedule recurring jobs
  */
-async function startAgenda() {
+async function startAgenda(options = {}) {
   if (!agenda) {
     logger.error("Agenda not initialized. Call initAgenda first.");
     return;
   }
-  
-  try {
-    await agenda.start();
-    logger.info("Agenda started");
 
-    // Cancel any stale jobs from previous runs before rescheduling
-    await agenda.cancel({ name: "sync-questions-from-sheet" });
-
-    // Schedule the sync job to run every 12 hours
-    const syncInterval = process.env.AGENDA_SYNC_INTERVAL || "12 hours";
-    await agenda.every(syncInterval, "sync-questions-from-sheet");
-    logger.info({ syncInterval }, "Scheduled: sync-questions-from-sheet");
-  } catch (err) {
-    logger.error({ err }, "Error starting Agenda");
+  if (startPromise) {
+    return startPromise;
   }
+
+  const {
+    withRecurringSync = false,
+    syncInterval = process.env.AGENDA_SYNC_INTERVAL || "12 hours",
+  } = options;
+  
+  startPromise = (async () => {
+    try {
+      await agenda.start();
+      logger.info("Agenda started");
+
+      if (withRecurringSync) {
+        // Cancel any stale jobs from previous runs before rescheduling.
+        await agenda.cancel({ name: "sync-questions-from-sheet" });
+        await agenda.every(syncInterval, "sync-questions-from-sheet");
+        logger.info({ syncInterval }, "Scheduled: sync-questions-from-sheet");
+      }
+    } catch (err) {
+      logger.error({ err }, "Error starting Agenda");
+      startPromise = null;
+      throw err;
+    }
+  })();
+
+  return startPromise;
 }
 
 /**
@@ -172,6 +193,7 @@ async function stopAgenda() {
   
   try {
     await agenda.stop();
+    startPromise = null;
     logger.info("Agenda stopped");
   } catch (err) {
     logger.error({ err }, "Error stopping Agenda");
@@ -210,10 +232,15 @@ async function enqueueExamAIAnalysis(attemptId) {
   }
 }
 
+function getAgenda() {
+  return agenda;
+}
+
 module.exports = {
   initAgenda,
   startAgenda,
   stopAgenda,
   triggerSync,
   enqueueExamAIAnalysis,
+  getAgenda,
 };
