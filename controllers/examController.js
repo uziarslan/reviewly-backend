@@ -5,7 +5,6 @@ const Reviewer = require("../models/Reviewer");
 const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
 const { generateRecommendations, populateRecommendationReviewers } = require("../utils/recommendations");
-const { enqueueExamAIAnalysis } = require("../utils/agenda");
 
 // ─── helpers ──────────────────────────────────────
 
@@ -417,15 +416,10 @@ exports.submitExam = async (req, res, next) => {
         .json({ success: false, message: "Attempt not found or already submitted" });
     }
 
-    if (attempt.result?.aiStatus === "complete") {
-      return res.json({
-        success: true,
-        data: {
-          attemptId: attempt._id,
-          result: attempt.result,
-        },
-      });
-    }
+    console.log("[EXAM SUBMIT] attempt submit started", {
+      attemptId: attempt._id?.toString(),
+      userId: req.user._id?.toString(),
+    });
 
     // Grade each answer
     const questions = attempt.questions;
@@ -526,7 +520,6 @@ exports.submitExam = async (req, res, next) => {
       improvements,
       performanceLevel,
       duration: durationSeconds,
-      aiStatus: "pending",
     };
 
     // Generate recommended next steps (backend-driven)
@@ -599,9 +592,10 @@ exports.submitExam = async (req, res, next) => {
         recommendedNextStep: { ...plainResult.recommendedNextStep, ctas: populatedCtas },
       };
     }
-    enqueueExamAIAnalysis(updated._id).catch((err) =>
-      logger.error({ err }, "Failed to enqueue AI analysis")
-    );
+    console.log("[EXAM SUBMIT] result saved to DB", {
+      attemptId: updated._id?.toString(),
+      userId: req.user._id?.toString(),
+    });
     res.json({
       success: true,
       data: {
@@ -694,20 +688,6 @@ exports.getAttemptResult = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Attempt not found" });
     }
 
-    if (
-      attempt.result &&
-      attempt.result.aiStatus === "complete" &&
-      attempt.status === "submitted"
-    ) {
-      return res.json({
-        success: true,
-        status: "completed",
-        progressStage: "completed",
-        cached: true,
-        data: attempt,
-      });
-    }
-
     // Backward compatibility: generate recommendations on-the-fly if missing
     if (attempt.result && !attempt.result.recommendedNextStep?.ctas?.length) {
       try {
@@ -740,29 +720,8 @@ exports.getAttemptResult = async (req, res, next) => {
       );
     }
 
-    const aiStatus = attempt.result?.aiStatus;
-    let status = "completed";
-    let progressStage = "completed";
-
-    if (attempt.status !== "submitted" && attempt.status !== "timed_out") {
-      status = "processing";
-      progressStage = "saving";
-    } else if (aiStatus === "failed") {
-      status = "failed";
-      progressStage = "failed";
-    } else if (aiStatus === "complete") {
-      status = "completed";
-      progressStage = "completed";
-    } else if (aiStatus === "processing") {
-      status = "processing";
-      progressStage = "analyzing";
-    } else if (aiStatus === "pending") {
-      status = "processing";
-      progressStage = "finalizing";
-    } else {
-      status = "processing";
-      progressStage = "scoring";
-    }
+    const status = attempt.status === "submitted" || attempt.status === "timed_out" ? "completed" : "processing";
+    const progressStage = status === "completed" ? "completed" : "scoring";
 
     res.json({ success: true, status, progressStage, data: attempt });
   } catch (err) {

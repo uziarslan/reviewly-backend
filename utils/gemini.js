@@ -109,7 +109,11 @@ function buildPracticePrompt({ totalItems, correct, percentage, unanswered, time
 function safeParseJson(text) {
   try {
     return JSON.parse(text);
-  } catch (_) {
+  } catch (err) {
+    console.log("[GEMINI PARSE FAIL] invalid JSON", {
+      error: err.message,
+      preview: text?.slice(0, 200),
+    });
     return null;
   }
 }
@@ -132,15 +136,39 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
     "gemini-1.0-pro",
   ].filter(Boolean);
 
+  console.log("[GEMINI ANALYSIS] starting", {
+    examType,
+    totalItems,
+    correct,
+    percentage,
+    unanswered,
+    timeSpentSeconds,
+    sectionName,
+    candidates,
+  });
+
   let parsed = null;
   for (const modelName of candidates) {
+    console.log("[GEMINI CALL] model selected", { modelName });
     try {
       const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent(prompt);
       const text = result?.response?.text?.() || "";
+      console.log("[GEMINI RESPONSE RECEIVED]", {
+        modelName,
+        textPreview: text.slice(0, 200),
+        length: text.length,
+      });
       parsed = safeParseJson(text);
+      if (!parsed) {
+        console.log("[GEMINI RESPONSE PARSE FAILED]", { modelName });
+      }
       if (parsed) break;
     } catch (err) {
+      console.log("[GEMINI MODEL ERROR]", {
+        modelName,
+        error: err?.message || err,
+      });
       // Try next model if this one is not available.
       const msg = err?.message || "";
       if (!msg.includes("not found") && !msg.includes("NOT_FOUND")) {
@@ -152,6 +180,7 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
   // For practice exams, different validation
   if (isPractice) {
     if (!parsed || typeof parsed.quickSummary !== "string") {
+      console.log("[GEMINI ANALYSIS] practice validation failed", { parsed: !!parsed });
       return null;
     }
     return {
@@ -166,6 +195,7 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
   }
 
   if (!parsed || !Array.isArray(parsed.strengths) || !Array.isArray(parsed.improvements)) {
+    console.log("[GEMINI ANALYSIS] validation failed", { parsed: !!parsed });
     return null;
   }
 
@@ -176,9 +206,9 @@ async function generateGeminiAnalysis({ totalItems, correct, percentage, section
     quickSummary: typeof parsed.quickSummary === "string" ? parsed.quickSummary : null,
     sectionAnalysis: Array.isArray(parsed.sectionAnalysis)
       ? parsed.sectionAnalysis.map((sa) => ({
-          section: sa.section || "",
-          lines: Array.isArray(sa.lines) ? sa.lines.slice(0, 3) : [],
-        }))
+        section: sa.section || "",
+        lines: Array.isArray(sa.lines) ? sa.lines.slice(0, 3) : [],
+      }))
       : [],
   };
 }
