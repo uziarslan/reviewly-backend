@@ -48,7 +48,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "3mb" })); // higher limit to support score-card image uploads
 app.use(cookieParser());
 app.use(compression());
 
@@ -95,6 +95,89 @@ app.post("/api/admin/sync-questions", async (req, res, next) => {
     console.error("❌ Sync error:", err.message);
     next(err);
   }
+});
+
+// ── OG Share page ─────────────────────────────────
+// Serves an HTML page with Open Graph meta tags so that Facebook and other
+// link-preview crawlers see a proper title, description, and image.
+// Real users are immediately JS-redirected to the React SPA.
+app.get("/share/:shareToken", async (req, res) => {
+  const { shareToken } = req.params;
+
+  // Accept only 32-char hex tokens to avoid open-redirect / injection
+  const frontendOrigin = (process.env.DOMAIN_FRONTEND || "https://reviewly.ph")
+    .split(",")[0].trim();
+  const reactUrl = `${frontendOrigin}/share/${encodeURIComponent(shareToken)}`;
+
+  if (!shareToken || !/^[0-9a-f]{32}$/.test(shareToken)) {
+    return res.redirect(frontendOrigin);
+  }
+
+  // Safe HTML entity escaping to prevent XSS in meta tags
+  const esc = (str) =>
+    String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  let ogTitle = "My Mock Exam Score – Reviewly";
+  let ogDesc  = "Take a realistic Civil Service mock exam and see how close you are to passing.";
+  let ogImage = `${frontendOrigin}/og-share.png`; // default static fallback
+
+  try {
+    await ensureDbConnected();
+    const Attempt = require("./models/Attempt");
+    const attempt = await Attempt.findOne({ shareToken })
+      .populate("reviewer", "title")
+      .select("reviewer result shareImage")
+      .lean();
+
+    if (attempt) {
+      const examTitle = attempt.reviewer?.title || "Mock Exam";
+      const pct = attempt.result?.percentage != null
+        ? Number(attempt.result.percentage).toFixed(0)
+        : null;
+      const passed = attempt.result?.passed;
+      if (pct !== null) {
+        ogTitle = `${pct}% on ${examTitle} – Reviewly`;
+        ogDesc  = passed
+          ? `✅ Know where you stand. Pass with a plan. I passed the ${examTitle} with a score of ${pct}% on Reviewly!`
+          : `✅ Know where you stand. Pass with a plan. I scored ${pct}% on the ${examTitle}. See the full breakdown on Reviewly.`;
+      }
+      // Use the uploaded score-card image if available
+      if (attempt.shareImage) {
+        const backendBase = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
+        ogImage = `${backendBase}/api/exams/shared/${shareToken}/image`;
+      }
+    }
+  } catch (_err) {
+    // Fail gracefully – serve the page with default OG tags
+  }
+
+  res.setHeader("Content-Type", "text/html; charset=UTF-8");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${esc(ogTitle)}</title>
+  <meta property="og:title" content="${esc(ogTitle)}" />
+  <meta property="og:description" content="${esc(ogDesc)}" />
+  <meta property="og:image" content="${esc(ogImage)}" />
+  <meta property="og:url" content="${esc(reactUrl)}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Reviewly" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${esc(ogTitle)}" />
+  <meta name="twitter:description" content="${esc(ogDesc)}" />
+  <meta name="twitter:image" content="${esc(ogImage)}" />
+  <meta http-equiv="refresh" content="0; url=${esc(reactUrl)}" />
+  <script>window.location.replace(${JSON.stringify(reactUrl)});</script>
+</head>
+<body>
+  <p>Redirecting&#8230; <a href="${esc(reactUrl)}">Click here</a> if not redirected.</p>
+</body>
+</html>`);
 });
 
 // ── Health check ────────────────────────────────

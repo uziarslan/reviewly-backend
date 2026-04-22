@@ -14,13 +14,40 @@ function shuffle(arr) {
   return arr;
 }
 
-function selectWithDifficulty(pool, count, diffDist) {
+/** Max questions drawn from a single topic per section. */
+const MAX_PER_TOPIC = 3;
+
+/**
+ * Select `count` questions from `pool` trying to match difficulty %
+ * while spreading across topics (max MAX_PER_TOPIC per topic).
+ */
+function selectWithTopicAndDifficulty(pool, count, diffDist) {
+  // Step 1: Build a diverse candidate pool — max MAX_PER_TOPIC per topic.
+  const byTopic = {};
+  pool.forEach((q) => {
+    const topic = (q.topic || "__other__").toLowerCase().trim();
+    if (!byTopic[topic]) byTopic[topic] = [];
+    byTopic[topic].push(q);
+  });
+  Object.values(byTopic).forEach((arr) => shuffle(arr));
+
+  const diversePool = [];
+  for (const topicQuestions of Object.values(byTopic)) {
+    let taken = 0;
+    for (const q of topicQuestions) {
+      if (taken >= MAX_PER_TOPIC) break;
+      diversePool.push(q);
+      taken++;
+    }
+  }
+
+  // Step 2: Apply difficulty distribution on the diverse pool.
   const easyTarget = Math.round((diffDist.easy / 100) * count);
   const hardTarget = Math.round((diffDist.hard / 100) * count);
   const medTarget = count - easyTarget - hardTarget;
 
   const buckets = { easy: [], medium: [], hard: [] };
-  pool.forEach((q) => {
+  diversePool.forEach((q) => {
     const d = q.difficulty?.toLowerCase() || "medium";
     if (buckets[d]) buckets[d].push(q);
     else buckets.medium.push(q);
@@ -35,9 +62,10 @@ function selectWithDifficulty(pool, count, diffDist) {
   selected.push(...buckets.medium.slice(0, medTarget));
   selected.push(...buckets.hard.slice(0, hardTarget));
 
+  // If still short, fill from full pool.
   if (selected.length < count) {
-    const usedIds = new Set(selected.map((q) => q._id.toString()));
-    const remaining = pool.filter((q) => !usedIds.has(q._id.toString()));
+    const selectedIds = new Set(selected.map((q) => q._id.toString()));
+    const remaining = pool.filter((q) => !selectedIds.has(q._id.toString()));
     shuffle(remaining);
     selected.push(...remaining.slice(0, count - selected.length));
   }
@@ -49,15 +77,33 @@ async function assembleDynamic(cfg) {
   const allSelected = [];
 
   for (const sd of cfg.sectionDistribution) {
-    const filter = {
+    const isGeneralInfo =
+      sd.section === "general information" || sd.section === "general_info";
+
+    const baseFilter = {
       status: "approved",
       examFamily: cfg.examFamily,
       examLevel: { $in: cfg.examLevel },
       section: sd.section,
     };
 
-    const pool = await Question.find(filter);
-    const selected = selectWithDifficulty(pool, sd.count, cfg.difficultyDistribution);
+    // For non-general-info sections, prefer questions with a topic assigned.
+    let pool = await Question.find(
+      isGeneralInfo
+        ? baseFilter
+        : { ...baseFilter, topic: { $exists: true, $ne: "" } }
+    );
+
+    // Fallback: if the topic-filtered pool is too small, use the full section pool.
+    if (!isGeneralInfo && pool.length < sd.count) {
+      pool = await Question.find(baseFilter);
+    }
+
+    const selected = selectWithTopicAndDifficulty(
+      pool,
+      sd.count,
+      cfg.difficultyDistribution
+    );
     allSelected.push(...selected);
   }
 

@@ -127,6 +127,8 @@ const attemptSchema = new mongoose.Schema(
     },
     // Public share token (generated on demand)
     shareToken: { type: String },
+    // Score card image for OG link previews (stored as JPEG buffer)
+    shareImage: { type: Buffer, default: null },
   },
   { timestamps: true }
 );

@@ -112,6 +112,8 @@ const reviewerSchema = new mongoose.Schema(
       coverage: [coverageItemSchema],
       //Coverage end text
       coverageEndText: { type: String, default: null },
+      // Short note under exam breakdown chart/table
+      breakdownFootnote: { type: String, default: null },
       // Text after coverage (e.g. difficulty note)
       difficultyText: { type: String, default: null },
       // Disclaimer at the end

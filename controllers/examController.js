@@ -17,17 +17,41 @@ function shuffle(arr) {
   return arr;
 }
 
+/** Max questions drawn from a single topic per section. */
+const MAX_PER_TOPIC = 3;
+
 /**
- * Select `count` questions from `pool` trying to match difficulty %.
- * diffDist = { easy: 30, medium: 50, hard: 20 }  (percentages)
+ * Select `count` questions from `pool` trying to match difficulty %
+ * while spreading across topics (max MAX_PER_TOPIC per topic).
+ * diffDist = { easy: 30, medium: 50, hard: 20 } (percentages)
  */
-function selectWithDifficulty(pool, count, diffDist) {
+function selectWithTopicAndDifficulty(pool, count, diffDist) {
+  // Step 1: Build a diverse candidate pool — max MAX_PER_TOPIC per topic.
+  const byTopic = {};
+  pool.forEach((q) => {
+    const topic = (q.topic || "__other__").toLowerCase().trim();
+    if (!byTopic[topic]) byTopic[topic] = [];
+    byTopic[topic].push(q);
+  });
+  Object.values(byTopic).forEach((arr) => shuffle(arr));
+
+  const diversePool = [];
+  for (const topicQuestions of Object.values(byTopic)) {
+    let taken = 0;
+    for (const q of topicQuestions) {
+      if (taken >= MAX_PER_TOPIC) break;
+      diversePool.push(q);
+      taken++;
+    }
+  }
+
+  // Step 2: Apply difficulty distribution on the diverse pool.
   const easyTarget = Math.round((diffDist.easy / 100) * count);
   const hardTarget = Math.round((diffDist.hard / 100) * count);
   const medTarget = count - easyTarget - hardTarget;
 
   const buckets = { easy: [], medium: [], hard: [] };
-  pool.forEach((q) => {
+  diversePool.forEach((q) => {
     const d = q.difficulty?.toLowerCase() || "medium";
     if (buckets[d]) buckets[d].push(q);
     else buckets.medium.push(q);
@@ -42,10 +66,10 @@ function selectWithDifficulty(pool, count, diffDist) {
   selected.push(...buckets.medium.slice(0, medTarget));
   selected.push(...buckets.hard.slice(0, hardTarget));
 
-  // If any bucket was short, fill from others
+  // If still short (diverse pool couldn't fill all buckets), fill from full pool.
   if (selected.length < count) {
-    const usedIds = new Set(selected.map((q) => q._id.toString()));
-    const remaining = pool.filter((q) => !usedIds.has(q._id.toString()));
+    const selectedIds = new Set(selected.map((q) => q._id.toString()));
+    const remaining = pool.filter((q) => !selectedIds.has(q._id.toString()));
     shuffle(remaining);
     selected.push(...remaining.slice(0, count - selected.length));
   }
@@ -204,21 +228,36 @@ exports.startExam = async (req, res, next) => {
 
 /**
  * Assemble questions dynamically based on exam config.
+ * Non-general-info sections prefer questions that have a topic assigned;
+ * falls back to the full section pool if the filtered pool is too small.
  */
 async function assembleDynamic(cfg) {
   const allSelected = [];
 
   for (const sd of cfg.sectionDistribution) {
-    const filter = {
+    const isGeneralInfo =
+      sd.section === "general information" || sd.section === "general_info";
+
+    const baseFilter = {
       status: "approved",
       examFamily: cfg.examFamily,
       examLevel: { $in: cfg.examLevel },
       section: sd.section,
     };
 
-    const pool = await Question.find(filter);
+    // For non-general-info sections, prefer questions with a topic assigned.
+    let pool = await Question.find(
+      isGeneralInfo
+        ? baseFilter
+        : { ...baseFilter, topic: { $exists: true, $ne: "" } }
+    );
 
-    const selected = selectWithDifficulty(
+    // Fallback: if the topic-filtered pool is too small, use the full section pool.
+    if (!isGeneralInfo && pool.length < sd.count) {
+      pool = await Question.find(baseFilter);
+    }
+
+    const selected = selectWithTopicAndDifficulty(
       pool,
       sd.count,
       cfg.difficultyDistribution
@@ -908,7 +947,10 @@ exports.generateShareLink = async (req, res, next) => {
       await attempt.save();
     }
 
-    res.json({ success: true, shareToken: attempt.shareToken });
+    const backendBase = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
+    const shareUrl = `${backendBase}/share/${attempt.shareToken}`;
+
+    res.json({ success: true, shareToken: attempt.shareToken, shareUrl });
   } catch (err) {
     next(err);
   }
@@ -948,6 +990,86 @@ exports.getSharedResult = async (req, res, next) => {
         result: { sectionScores, percentage, passed, correct, totalItems, duration, passingScore },
       },
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/exams/attempts/:attemptId/share-image
+ * Protected. Receives a JPEG data URL and stores it as the OG preview image for this attempt.
+ */
+exports.uploadShareImage = async (req, res, next) => {
+  try {
+    const { attemptId } = req.params;
+    const { imageData } = req.body;
+
+    if (!imageData || typeof imageData !== "string") {
+      return res.status(400).json({ success: false, message: "No image data provided" });
+    }
+
+    // Accept JPEG or PNG data URLs
+    const match = imageData.match(/^data:image\/(jpeg|png);base64,(.+)$/);
+    if (!match) {
+      return res.status(400).json({ success: false, message: "Invalid image format. Expected JPEG or PNG data URL." });
+    }
+
+    const buffer = Buffer.from(match[2], "base64");
+
+    // Reject unreasonably large images (>3 MB buffer)
+    if (buffer.length > 3 * 1024 * 1024) {
+      return res.status(400).json({ success: false, message: "Image too large (max 3 MB)" });
+    }
+
+    const attempt = await Attempt.findOne({
+      _id: attemptId,
+      user: req.user._id,
+      status: { $in: ["submitted", "timed_out"] },
+    });
+
+    if (!attempt) {
+      return res.status(404).json({ success: false, message: "Attempt not found" });
+    }
+
+    attempt.shareImage = buffer;
+    await attempt.save();
+
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/exams/shared/:shareToken/image
+ * Public. Serves the stored score-card image for OG link previews.
+ * Falls back to the static branded image if none has been uploaded yet.
+ */
+exports.getShareImage = async (req, res, next) => {
+  try {
+    const { shareToken } = req.params;
+
+    if (!shareToken || shareToken.length !== 32) {
+      return res.status(400).send("Invalid token");
+    }
+
+    const attempt = await Attempt.findOne({ shareToken }).select("shareImage").lean();
+
+    if (attempt?.shareImage) {
+      const buf = Buffer.isBuffer(attempt.shareImage)
+        ? attempt.shareImage
+        : Buffer.from(attempt.shareImage.buffer || attempt.shareImage);
+
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Content-Length", buf.length);
+      return res.send(buf);
+    }
+
+    // No custom image yet — redirect to static branded fallback
+    const frontendOrigin = (process.env.DOMAIN_FRONTEND || "https://reviewly.ph")
+      .split(",")[0].trim();
+    return res.redirect(`${frontendOrigin}/og-share.png`);
   } catch (err) {
     next(err);
   }
