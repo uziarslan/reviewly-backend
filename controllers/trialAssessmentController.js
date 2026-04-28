@@ -276,7 +276,6 @@ exports.startTrialExam = async (req, res, next) => {
         sectionScores: [],
         strengths: [],
         improvements: [],
-        aiSummary: null,
       },
     };
 
@@ -428,7 +427,6 @@ exports.submitTrialExam = async (req, res, next) => {
             improvements,
             performanceLevel,
             duration: durationSeconds,
-            aiStatus: null,
           },
         },
       },

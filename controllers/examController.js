@@ -4,6 +4,7 @@ const logger = require("../utils/logger");
 const Reviewer = require("../models/Reviewer");
 const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
+const { cloudinary } = require("../cloudinary");
 const { generateRecommendations, populateRecommendationReviewers } = require("../utils/recommendations");
 
 // ─── helpers ──────────────────────────────────────
@@ -166,7 +167,6 @@ exports.startExam = async (req, res, next) => {
         sectionScores: [],
         strengths: [],
         improvements: [],
-        aiSummary: null,
       },
     };
 
@@ -947,8 +947,10 @@ exports.generateShareLink = async (req, res, next) => {
       await attempt.save();
     }
 
-    const backendBase = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
-    const shareUrl = `${backendBase}/share/${attempt.shareToken}`;
+    const frontendOrigin = (process.env.DOMAIN_FRONTEND || `${req.protocol}://${req.get("host")}`)
+      .split(",")[0]
+      .trim();
+    const shareUrl = `${frontendOrigin}/share/${attempt.shareToken}`;
 
     res.json({ success: true, shareToken: attempt.shareToken, shareUrl });
   } catch (err) {
@@ -1031,10 +1033,19 @@ exports.uploadShareImage = async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Attempt not found" });
     }
 
-    attempt.shareImage = buffer;
+    const uploadResult = await cloudinary.uploader.upload(imageData, {
+      folder: "reviewly/share_images",
+      public_id: `share_${attempt._id.toString()}`,
+      overwrite: true,
+      resource_type: "image",
+      quality: "auto:low",
+      fetch_format: "auto",
+    });
+
+    attempt.shareImageUrl = uploadResult.secure_url;
     await attempt.save();
 
-    res.json({ success: true });
+    res.json({ success: true, url: uploadResult.secure_url });
   } catch (err) {
     next(err);
   }
@@ -1053,7 +1064,11 @@ exports.getShareImage = async (req, res, next) => {
       return res.status(400).send("Invalid token");
     }
 
-    const attempt = await Attempt.findOne({ shareToken }).select("shareImage").lean();
+    const attempt = await Attempt.findOne({ shareToken }).select("shareImage shareImageUrl").lean();
+
+    if (attempt?.shareImageUrl) {
+      return res.redirect(attempt.shareImageUrl);
+    }
 
     if (attempt?.shareImage) {
       const buf = Buffer.isBuffer(attempt.shareImage)

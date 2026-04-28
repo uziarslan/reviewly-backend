@@ -122,7 +122,7 @@ app.get("/share/:shareToken", async (req, res) => {
       .replace(/>/g, "&gt;");
 
   let ogTitle = "My Mock Exam Score – Reviewly";
-  let ogDesc  = "Take a realistic Civil Service mock exam and see how close you are to passing.";
+  let ogDesc = "Take a realistic Civil Service mock exam and see how close you are to passing.";
   let ogImage = `${frontendOrigin}/og-share.png`; // default static fallback
 
   try {
@@ -130,7 +130,7 @@ app.get("/share/:shareToken", async (req, res) => {
     const Attempt = require("./models/Attempt");
     const attempt = await Attempt.findOne({ shareToken })
       .populate("reviewer", "title")
-      .select("reviewer result shareImage")
+      .select("reviewer result shareImage shareImageUrl")
       .lean();
 
     if (attempt) {
@@ -141,12 +141,14 @@ app.get("/share/:shareToken", async (req, res) => {
       const passed = attempt.result?.passed;
       if (pct !== null) {
         ogTitle = `${pct}% on ${examTitle} – Reviewly`;
-        ogDesc  = passed
+        ogDesc = passed
           ? `✅ Know where you stand. Pass with a plan. I passed the ${examTitle} with a score of ${pct}% on Reviewly!`
           : `✅ Know where you stand. Pass with a plan. I scored ${pct}% on the ${examTitle}. See the full breakdown on Reviewly.`;
       }
-      // Use the uploaded score-card image if available
-      if (attempt.shareImage) {
+      // Use the uploaded score-card image if available. If not, fall back to the static shared card asset.
+      if (attempt.shareImageUrl) {
+        ogImage = attempt.shareImageUrl;
+      } else if (attempt.shareImage) {
         const backendBase = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
         ogImage = `${backendBase}/api/exams/shared/${shareToken}/image`;
       }
