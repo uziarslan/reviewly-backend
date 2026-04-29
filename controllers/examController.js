@@ -928,6 +928,32 @@ exports.getReviewerProgress = async (req, res, next) => {
  * POST /api/exams/attempts/:attemptId/share
  * Generate (or return existing) share token for an attempt.
  */
+const getFrontendOriginFromRequest = (req) => {
+  const configuredOrigins = (process.env.DOMAIN_FRONTEND || `${req.protocol}://${req.get('host')}`)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const originHeader = String(req.get('origin') || '').trim();
+  if (originHeader && configuredOrigins.includes(originHeader)) {
+    return originHeader;
+  }
+
+  const referer = String(req.get('referer') || '').trim();
+  if (referer) {
+    try {
+      const url = new URL(referer);
+      if (configuredOrigins.includes(url.origin)) {
+        return url.origin;
+      }
+    } catch (err) {
+      // ignore invalid referer
+    }
+  }
+
+  return configuredOrigins[0] || `${req.protocol}://${req.get('host')}`;
+};
+
 exports.generateShareLink = async (req, res, next) => {
   try {
     const { attemptId } = req.params;
@@ -947,9 +973,7 @@ exports.generateShareLink = async (req, res, next) => {
       await attempt.save();
     }
 
-    const frontendOrigin = (process.env.DOMAIN_FRONTEND || `${req.protocol}://${req.get("host")}`)
-      .split(",")[0]
-      .trim();
+    const frontendOrigin = getFrontendOriginFromRequest(req);
     const shareUrl = `${frontendOrigin}/share/${attempt.shareToken}`;
 
     res.json({ success: true, shareToken: attempt.shareToken, shareUrl });
@@ -1082,8 +1106,7 @@ exports.getShareImage = async (req, res, next) => {
     }
 
     // No custom image yet — redirect to static branded fallback
-    const frontendOrigin = (process.env.DOMAIN_FRONTEND || "https://reviewly.ph")
-      .split(",")[0].trim();
+    const frontendOrigin = getFrontendOriginFromRequest(req);
     return res.redirect(`${frontendOrigin}/og-share.png`);
   } catch (err) {
     next(err);
