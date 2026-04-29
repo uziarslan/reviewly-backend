@@ -65,6 +65,7 @@ app.use("/api/library", require("./routes/library"));
 app.use("/api/exams", require("./routes/exams"));
 app.use("/api/trial-assessment", require("./routes/trialAssessment"));
 app.use("/api/support", require("./routes/support"));
+app.use("/api/dashboard", require("./routes/dashboard"));
 
 // ── Admin: Manual sync trigger ──────────────────
 app.post("/api/admin/sync-questions", async (req, res, next) => {

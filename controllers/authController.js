@@ -215,7 +215,7 @@ exports.getMe = async (req, res) => {
  */
 exports.updateMe = async (req, res, next) => {
   try {
-    const { firstName, lastName, marketingEmails } = req.body;
+    const { firstName, lastName, marketingEmails, examDate } = req.body;
 
     const user = await User.findById(req.user._id);
     if (!user) {
@@ -227,6 +227,14 @@ exports.updateMe = async (req, res, next) => {
     if (firstName !== undefined) user.firstName = firstName;
     if (lastName !== undefined) user.lastName = lastName;
     if (marketingEmails !== undefined) user.marketingEmails = marketingEmails;
+    if (examDate !== undefined) {
+      if (examDate === null || examDate === "") {
+        user.examDate = null;
+      } else {
+        const parsed = new Date(examDate);
+        if (!Number.isNaN(parsed.getTime())) user.examDate = parsed;
+      }
+    }
 
     await user.save();
     res.json({ success: true, user });

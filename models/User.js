@@ -72,6 +72,12 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Optional exam date used by the Readiness Checker to show "days before CSE".
+    // When null the days block is hidden.
+    examDate: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

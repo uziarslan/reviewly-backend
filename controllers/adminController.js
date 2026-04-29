@@ -1,6 +1,9 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
+const Setting = require("../models/Setting");
 const generateToken = require("../utils/generateToken");
+
+const SETTING_KEY_CSE_EXAM_DATE = "cseExamDate";
 
 /* ──────────────────────────────────────────────
    AUTH
@@ -171,6 +174,76 @@ exports.deleteUser = async (req, res, next) => {
     }
 
     res.json({ success: true, message: "User deleted" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ──────────────────────────────────────────────
+   APP SETTINGS — exam schedule
+   ────────────────────────────────────────────── */
+
+/**
+ * GET /api/admin/settings/exam-date
+ * Returns the next CSE exam date (or null if not set).
+ */
+exports.getCseExamDate = async (_req, res, next) => {
+  try {
+    const doc = await Setting.findOne({ key: SETTING_KEY_CSE_EXAM_DATE });
+    const value = doc?.value || null;
+    res.json({
+      success: true,
+      data: {
+        cseExamDate: value ? new Date(value).toISOString() : null,
+        updatedAt: doc?.updatedAt || null,
+        updatedBy: doc?.updatedBy || null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PUT /api/admin/settings/exam-date
+ * Body: { cseExamDate: ISOString | null }
+ * Set or clear the next CSE exam date.
+ */
+exports.updateCseExamDate = async (req, res, next) => {
+  try {
+    const { cseExamDate } = req.body || {};
+
+    let valueToStore = null;
+    if (cseExamDate !== null && cseExamDate !== "" && cseExamDate !== undefined) {
+      const parsed = new Date(cseExamDate);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid date format",
+        });
+      }
+      valueToStore = parsed;
+    }
+
+    const doc = await Setting.findOneAndUpdate(
+      { key: SETTING_KEY_CSE_EXAM_DATE },
+      {
+        $set: {
+          value: valueToStore,
+          updatedBy: req.user._id,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        cseExamDate: doc?.value ? new Date(doc.value).toISOString() : null,
+        updatedAt: doc?.updatedAt || null,
+        updatedBy: doc?.updatedBy || null,
+      },
+    });
   } catch (err) {
     next(err);
   }

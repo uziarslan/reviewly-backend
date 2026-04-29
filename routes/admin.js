@@ -6,6 +6,8 @@ const {
   getUsers,
   updateUser,
   deleteUser,
+  getCseExamDate,
+  updateCseExamDate,
 } = require("../controllers/adminController");
 const {
   getOverview,
@@ -23,6 +25,10 @@ router.get("/me", protect, admin, getAdminMe);
 router.get("/users", protect, admin, getUsers);
 router.put("/users/:id", protect, admin, updateUser);
 router.delete("/users/:id", protect, admin, deleteUser);
+
+// ── App settings (admin only) ──
+router.get("/settings/exam-date", protect, admin, getCseExamDate);
+router.put("/settings/exam-date", protect, admin, updateCseExamDate);
 
 // ── Analytics (admin only) ──
 router.get("/analytics/overview", protect, admin, getOverview);
