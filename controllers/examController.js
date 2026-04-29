@@ -997,7 +997,7 @@ exports.getSharedResult = async (req, res, next) => {
 
     const attempt = await Attempt.findOne({ shareToken })
       .populate("reviewer", "title type examConfig")
-        .select("reviewer result submittedAt shareToken shareImageUrl")
+      .select("reviewer result submittedAt shareToken shareImageUrl")
       .lean();
 
     if (!attempt) {
@@ -1013,7 +1013,7 @@ exports.getSharedResult = async (req, res, next) => {
       data: {
         reviewer: attempt.reviewer,
         submittedAt: attempt.submittedAt,
-          shareImageUrl: attempt.shareImageUrl || null,
+        shareImageUrl: attempt.shareImageUrl || null,
         result: { sectionScores, percentage, passed, correct, totalItems, duration, passingScore },
       },
     });
