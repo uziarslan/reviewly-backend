@@ -6,6 +6,7 @@ const {
   startSprintTask,
   submitSprintTask,
   saveSprintTaskAnswer,
+  getSprintTaskReview,
 } = require("../controllers/dashboardController");
 const { protect } = require("../middleware/auth");
 
@@ -22,5 +23,6 @@ router.delete("/sprint", abandonSprint);
 router.post("/sprint/tasks/:taskId/start", startSprintTask);
 router.put("/sprint/tasks/:taskId/answer", saveSprintTaskAnswer);
 router.post("/sprint/tasks/:taskId/submit", submitSprintTask);
+router.get("/sprint/tasks/:taskId/review", getSprintTaskReview);
 
 module.exports = router;

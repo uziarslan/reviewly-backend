@@ -55,10 +55,10 @@ function publicPlanShape(plan) {
       hasAttempt: !!(t.attempt && t.attempt.questionIds && t.attempt.questionIds.length > 0),
       result: t.attempt?.submittedAt
         ? {
-            correct: t.attempt.result?.correct ?? 0,
-            totalItems: t.attempt.result?.totalItems ?? t.questionCount,
-            percentage: t.attempt.result?.percentage ?? 0,
-          }
+          correct: t.attempt.result?.correct ?? 0,
+          totalItems: t.attempt.result?.totalItems ?? t.questionCount,
+          percentage: t.attempt.result?.percentage ?? 0,
+        }
         : null,
     };
   });
@@ -406,7 +406,70 @@ exports.submitSprintTask = async (req, res, next) => {
     next(err);
   }
 };
+// ─── GET /api/dashboard/sprint/tasks/:taskId/review ───
+exports.getSprintTaskReview = async (req, res, next) => {
+  try {
+    const plan = await getActivePlan(req.user._id);
+    if (!plan) {
+      return res.status(404).json({ success: false, message: "No active sprint plan" });
+    }
 
+    const task = plan.tasks.find((t) => t.taskId === req.params.taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, message: "Task not found in plan" });
+    }
+
+    if (!task.attempt || !task.attempt.submittedAt || !task.attempt.questionIds?.length) {
+      return res.status(400).json({ success: false, message: "Task review not available" });
+    }
+
+    const questions = await Question.find({ _id: { $in: task.attempt.questionIds } }).lean();
+    const qById = new Map(questions.map((q) => [String(q._id), q]));
+
+    const review = task.attempt.questionIds.map((qid, idx) => {
+      const q = qById.get(String(qid));
+      const ans = task.attempt.answers?.[idx] || {};
+      return {
+        index: idx,
+        questionId: qid,
+        questionText: q?.questionText || "",
+        choiceA: q?.choiceA || "",
+        choiceB: q?.choiceB || "",
+        choiceC: q?.choiceC || "",
+        choiceD: q?.choiceD || "",
+        section: q?.section || "",
+        topic: canonicalTopic(q?.topic) || "",
+        correctAnswer: q?.correctAnswer || null,
+        explanationCorrect: q?.explanationCorrect || "",
+        explanationWrong: q?.explanationWrong || "",
+        reviewlyTip: q?.reviewlyTip || "",
+        selectedAnswer: ans?.selectedAnswer || null,
+        isCorrect: !!ans?.isCorrect,
+      };
+    });
+
+    const taskTopic = (task.topics && task.topics.length > 0)
+      ? task.topics.join(' + ')
+      : task.sectionLabel || prettySection(task.section);
+
+    res.json({
+      success: true,
+      data: {
+        result: task.attempt.result,
+        reviewer: {
+          _id: task.taskId,
+          title: task.title,
+          type: 'sprint_task',
+        },
+        taskTopic,
+        sprintPlan: publicPlanShape(plan),
+        questions: review,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
 // ─── PUT /api/dashboard/sprint/tasks/:taskId/answer ───
 // Save a single answer (autosave).
 
