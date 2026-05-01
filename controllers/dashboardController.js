@@ -2,6 +2,7 @@ const SprintPlan = require("../models/SprintPlan");
 const Question = require("../models/Question");
 const Setting = require("../models/Setting");
 const logger = require("../utils/logger");
+const { isPremiumActive, publicPlanState } = require("../utils/premium");
 
 const SETTING_KEY_CSE_EXAM_DATE = "cseExamDate";
 
@@ -121,6 +122,7 @@ exports.getDashboard = async (req, res, next) => {
         sectionBreakdown,
         recommendedFocus,
         sprintPlan: publicPlanShape(plan),
+        plan: publicPlanState(req.user),
       },
     });
   } catch (err) {
@@ -148,6 +150,25 @@ exports.generateSprint = async (req, res, next) => {
         message: "Active sprint plan already exists",
         data: { sprintPlan: publicPlanShape(existing) },
       });
+    }
+
+    // Free users may generate the first sprint preview, but cannot regenerate
+    // a fresh plan after completing one — that's a premium feature.
+    if (!isPremiumActive(req.user)) {
+      const completedPlan = await SprintPlan.findOne({
+        user: req.user._id,
+        status: "completed",
+      })
+        .select("_id")
+        .lean();
+      if (completedPlan) {
+        return res.status(402).json({
+          success: false,
+          code: "premium_required",
+          feature: "regenerate_sprint_after_completion",
+          message: "Unlock Premium to regenerate a fresh 7-day plan.",
+        });
+      }
     }
 
     const planData = generateSprintPlan(bundle);
@@ -198,6 +219,15 @@ exports.abandonSprint = async (req, res, next) => {
 
 exports.startSprintTask = async (req, res, next) => {
   try {
+    if (!isPremiumActive(req.user)) {
+      return res.status(402).json({
+        success: false,
+        code: "premium_required",
+        feature: "start_sprint_task",
+        message: "Unlock Premium to start sprint tasks.",
+      });
+    }
+
     const plan = await getActivePlan(req.user._id);
     if (!plan) {
       return res.status(404).json({ success: false, message: "No active sprint plan" });
@@ -294,6 +324,15 @@ exports.startSprintTask = async (req, res, next) => {
 
 exports.submitSprintTask = async (req, res, next) => {
   try {
+    if (!isPremiumActive(req.user)) {
+      return res.status(402).json({
+        success: false,
+        code: "premium_required",
+        feature: "start_sprint_task",
+        message: "Unlock Premium to submit sprint tasks.",
+      });
+    }
+
     const { answers } = req.body || {};
     if (!answers || typeof answers !== "object") {
       return res.status(400).json({ success: false, message: "Missing answers" });
@@ -475,6 +514,15 @@ exports.getSprintTaskReview = async (req, res, next) => {
 
 exports.saveSprintTaskAnswer = async (req, res, next) => {
   try {
+    if (!isPremiumActive(req.user)) {
+      return res.status(402).json({
+        success: false,
+        code: "premium_required",
+        feature: "start_sprint_task",
+        message: "Unlock Premium to save sprint answers.",
+      });
+    }
+
     const { questionIndex, selectedAnswer } = req.body || {};
     if (!Number.isInteger(questionIndex) || questionIndex < 0) {
       return res.status(400).json({ success: false, message: "Invalid question index" });

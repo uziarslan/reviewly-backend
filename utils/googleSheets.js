@@ -26,10 +26,75 @@ function escapeSheetName(name) {
   return needsQuotes ? `'${n.replace(/'/g, "''")}'` : n;
 }
 
+async function getSpreadsheetMeta({ spreadsheetId, auth }) {
+  const sheets = google.sheets({ version: "v4", auth });
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets(properties(sheetId,title))",
+  });
+  return { sheetsApi: sheets, meta: meta.data };
+}
+
+async function ensureSheet({ spreadsheetId, sheetName, headers = [] }) {
+  const auth = getSheetsAuth();
+  if (!spreadsheetId) {
+    const err = new Error("Google Sheets spreadsheet ID is not configured");
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const { sheetsApi } = await getSpreadsheetMeta({ spreadsheetId, auth });
+  const escapedSheetName = escapeSheetName(sheetName || "Sheet1");
+
+  let row1 = [];
+  try {
+    const res = await sheetsApi.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${escapedSheetName}!1:1`,
+    });
+    row1 = res.data.values?.[0] || [];
+  } catch (err) {
+    const isMissingSheet =
+      err?.response?.data?.error?.status === "INVALID_ARGUMENT" &&
+      /Unable to parse range/i.test(err.message || "");
+
+    if (!isMissingSheet) {
+      throw err;
+    }
+
+    await sheetsApi.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: sheetName || "Sheet1",
+              },
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  if (headers.length && row1.length === 0) {
+    await sheetsApi.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${escapedSheetName}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [headers],
+      },
+    });
+  }
+}
+
 /**
- * Get the next ticket ID (SUP-0001, SUP-0002, ...) by reading existing rows.
+ * Get the next sequential ID (e.g. SUP-0001, PAY-0001) by reading column A
+ * of an existing sheet and finding the highest matching prefix.
  */
-async function getNextTicketId({ spreadsheetId, sheetName }) {
+async function getNextSequentialId({ spreadsheetId, sheetName, prefix }) {
   const auth = getSheetsAuth();
   if (!spreadsheetId) {
     const err = new Error("Google Sheets spreadsheet ID is not configured");
@@ -47,19 +112,26 @@ async function getNextTicketId({ spreadsheetId, sheetName }) {
   });
 
   const rows = res.data.values || [];
+  const pat = new RegExp(`^${prefix}-(\\d+)$`, "i");
   let maxNum = 0;
-  const pattern = /^SUP-(\d+)$/i;
 
   for (let i = 1; i < rows.length; i++) {
     const cell = String(rows[i][0] || "").trim();
-    const m = cell.match(pattern);
+    const m = cell.match(pat);
     if (m) {
       const n = parseInt(m[1], 10);
       if (n > maxNum) maxNum = n;
     }
   }
 
-  return `SUP-${String(maxNum + 1).padStart(4, "0")}`;
+  return `${prefix}-${String(maxNum + 1).padStart(4, "0")}`;
+}
+
+/**
+ * Backwards-compatible alias for the support flow (SUP-0001…).
+ */
+async function getNextTicketId({ spreadsheetId, sheetName }) {
+  return getNextSequentialId({ spreadsheetId, sheetName, prefix: "SUP" });
 }
 
 /**
@@ -70,7 +142,7 @@ function parseRowFromA1Range(a1Range) {
   return match ? parseInt(match[2], 10) : null;
 }
 
-async function appendSheetRow({ spreadsheetId, sheetName, values }) {
+async function appendSheetRow({ spreadsheetId, sheetName, values, lastColumnLetter }) {
   const auth = getSheetsAuth();
   if (!spreadsheetId) {
     const err = new Error("Google Sheets spreadsheet ID is not configured");
@@ -80,7 +152,10 @@ async function appendSheetRow({ spreadsheetId, sheetName, values }) {
 
   const sheets = google.sheets({ version: "v4", auth });
   const escapedSheetName = escapeSheetName(sheetName || "Sheet1");
-  const range = `${escapedSheetName}!A1:L`;
+  // Range tail defaults to "L" (12 columns) for backwards-compat with the
+  // support log; callers can override for wider sheets.
+  const tailLetter = (lastColumnLetter || "L").toUpperCase();
+  const range = `${escapedSheetName}!A1:${tailLetter}`;
 
   const appendRes = await sheets.spreadsheets.values.append({
     spreadsheetId,
@@ -107,6 +182,8 @@ async function appendSheetRow({ spreadsheetId, sheetName, values }) {
     const sheetId = sheet?.properties?.sheetId;
 
     if (sheetId != null) {
+      // Convert column letter (A..Z) to a 0-based column index for the API
+      const endColumnIndex = tailLetter.charCodeAt(0) - "A".charCodeAt(0) + 1;
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         requestBody: {
@@ -118,7 +195,7 @@ async function appendSheetRow({ spreadsheetId, sheetName, values }) {
                   startRowIndex: row1Based - 1,
                   endRowIndex: row1Based,
                   startColumnIndex: 0,
-                  endColumnIndex: 12,
+                  endColumnIndex,
                 },
                 cell: {
                   userEnteredFormat: {
@@ -135,4 +212,9 @@ async function appendSheetRow({ spreadsheetId, sheetName, values }) {
   }
 }
 
-module.exports = { appendSheetRow, getNextTicketId };
+module.exports = {
+  appendSheetRow,
+  ensureSheet,
+  getNextTicketId,
+  getNextSequentialId,
+};

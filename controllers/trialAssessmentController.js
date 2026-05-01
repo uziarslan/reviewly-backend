@@ -197,13 +197,7 @@ exports.skipTrial = async (req, res, next) => {
 
 exports.startTrialExam = async (req, res, next) => {
   try {
-    // Prevent retaking if already completed
-    if (req.user.trialAssessment === true) {
-      return res.status(400).json({
-        success: false,
-        message: "Trial assessment already completed",
-      });
-    }
+    const isRetake = req.body?.retake === true;
 
     const reviewer = await Reviewer.findOne({
       _id: req.params.reviewerId,
@@ -219,13 +213,17 @@ exports.startTrialExam = async (req, res, next) => {
 
     const cfg = reviewer.examConfig;
 
-    // Check for existing in-progress attempt (resume)
+    // Check for existing attempt — must come BEFORE the trialAssessment guard
+    // so users with `trialAssessment: true` can still resume an in-progress
+    // retake. (Exam.js calls start() on mount without the retake flag to load
+    // the attempt; that load must succeed even though the flag is set.)
     let attempt = await Attempt.findOne({
       user: req.user._id,
       reviewer: reviewer._id,
     });
 
-    if (attempt && attempt.status === "in_progress") {
+    // Resume in-progress attempt regardless of user.trialAssessment flag.
+    if (attempt && attempt.status === "in_progress" && !isRetake) {
       await attempt.populate("questions");
       return res.json({
         success: true,
@@ -234,8 +232,21 @@ exports.startTrialExam = async (req, res, next) => {
       });
     }
 
+    // Block fresh starts (no in-progress attempt) when the user has already
+    // completed/skipped the trial — unless they explicitly opt in to a retake.
+    if (req.user.trialAssessment === true && !isRetake) {
+      return res.status(400).json({
+        success: false,
+        message: "Trial assessment already completed",
+      });
+    }
+
     // If already submitted, they've done it
-    if (attempt && (attempt.status === "submitted" || attempt.status === "timed_out")) {
+    if (
+      attempt &&
+      (attempt.status === "submitted" || attempt.status === "timed_out") &&
+      !isRetake
+    ) {
       await User.findByIdAndUpdate(req.user._id, {
         $set: { trialAssessment: true },
       });
@@ -243,6 +254,11 @@ exports.startTrialExam = async (req, res, next) => {
         success: false,
         message: "Trial assessment already completed",
       });
+    }
+
+    if (attempt && isRetake) {
+      await Attempt.deleteOne({ _id: attempt._id });
+      attempt = null;
     }
 
     // Assemble new questions
