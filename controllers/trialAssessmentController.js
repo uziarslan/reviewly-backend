@@ -182,8 +182,20 @@ exports.getTrialReviewers = async (req, res, next) => {
 
 exports.skipTrial = async (req, res, next) => {
   try {
+    const { examType } = req.body || {};
+    if (examType !== "professional" && examType !== "subprofessional") {
+      // examType is required at skip time — without it the user would land on
+      // an inconsistent dashboard (no track chosen) and immediately get
+      // bounced back here. Force them to pick before we mark the trial as
+      // done.
+      return res.status(400).json({
+        success: false,
+        message: "Pick a Civil Service Exam track before skipping the trial",
+      });
+    }
+
     await User.findByIdAndUpdate(req.user._id, {
-      $set: { trialAssessment: true },
+      $set: { trialAssessment: true, examType },
     });
 
     res.json({ success: true, message: "Trial assessment skipped" });
@@ -212,6 +224,22 @@ exports.startTrialExam = async (req, res, next) => {
     }
 
     const cfg = reviewer.examConfig;
+
+    // Persist the user's exam-type preference so the dashboard, sprint, and
+    // mock recommendations stay aligned with what they picked at onboarding.
+    // Prefers an explicit body param, then falls back to the reviewer's slug
+    // (the trial reviewers map 1:1 to a single track).
+    const explicitType = req.body?.examType;
+    let derivedType = null;
+    if (explicitType === "professional" || explicitType === "subprofessional") {
+      derivedType = explicitType;
+    } else if (typeof reviewer.slug === "string") {
+      if (reviewer.slug.includes("subprofessional")) derivedType = "subprofessional";
+      else if (reviewer.slug.includes("professional")) derivedType = "professional";
+    }
+    if (derivedType) {
+      await User.findByIdAndUpdate(req.user._id, { $set: { examType: derivedType } });
+    }
 
     // Check for existing attempt — must come BEFORE the trialAssessment guard
     // so users with `trialAssessment: true` can still resume an in-progress

@@ -1,4 +1,5 @@
 const Attempt = require("../../models/Attempt");
+const User = require("../../models/User");
 const { getSectionsForLevel, canonicalTopic } = require("./examStructure");
 
 /**
@@ -8,12 +9,28 @@ const { getSectionsForLevel, canonicalTopic } = require("./examStructure");
 const QUESTION_LITE_FIELDS = "section topic correctAnswer";
 
 /**
+ * Returns true when the reviewer's examLevel includes the user's chosen track.
+ * Reviewers tagged "both" (both levels in the array) match either side.
+ * If `examLevel` is null, no filtering is applied.
+ */
+function reviewerMatchesLevel(reviewer, examLevel) {
+  if (!examLevel) return true;
+  const levels = reviewer?.examConfig?.examLevel || [];
+  if (levels.includes(examLevel)) return true;
+  // Slug fallback for legacy reviewers without examConfig.examLevel.
+  const slug = reviewer?.slug || "";
+  if (examLevel === "subprofessional" && slug.includes("subprofessional")) return true;
+  if (examLevel === "professional" && slug.includes("professional") && !slug.includes("subprofessional")) return true;
+  return false;
+}
+
+/**
  * Find the user's most recent submitted attempt of a given reviewer type.
  *
  * Returns the attempts populated with reviewer (full doc) and questions
  * limited to fields needed for aggregation.
  */
-async function findLatestAttemptsByReviewerType(userId, reviewerType, limit = 3) {
+async function findLatestAttemptsByReviewerType(userId, reviewerType, limit = 3, examLevel = null) {
   const attempts = await Attempt.find({
     user: userId,
     status: { $in: ["submitted", "timed_out"] },
@@ -25,6 +42,7 @@ async function findLatestAttemptsByReviewerType(userId, reviewerType, limit = 3)
 
   const matched = attempts
     .filter((a) => a.reviewer?.type === reviewerType)
+    .filter((a) => reviewerMatchesLevel(a.reviewer, examLevel))
     .slice(0, limit);
 
   if (matched.length === 0) return [];
@@ -44,13 +62,13 @@ async function findLatestAttemptsByReviewerType(userId, reviewerType, limit = 3)
   return hydrated;
 }
 
-async function getLatestAssessmentAttempt(userId) {
-  const list = await findLatestAttemptsByReviewerType(userId, "trial_assessment", 1);
+async function getLatestAssessmentAttempt(userId, examLevel = null) {
+  const list = await findLatestAttemptsByReviewerType(userId, "trial_assessment", 1, examLevel);
   return list[0] || null;
 }
 
-async function getRecentFullMocks(userId, limit = 3) {
-  return findLatestAttemptsByReviewerType(userId, "mock", limit);
+async function getRecentFullMocks(userId, limit = 3, examLevel = null) {
+  return findLatestAttemptsByReviewerType(userId, "mock", limit, examLevel);
 }
 
 /**
@@ -59,9 +77,14 @@ async function getRecentFullMocks(userId, limit = 3) {
  *   1 mock  → latest_full_mock
  *   else    → assessment (if any)
  *   else    → no_data
+ *
+ * When `examLevel` is provided, only attempts on reviewers matching that
+ * track are considered — so a user preparing for Professional sees an empty
+ * dashboard until they take a Professional exam, even if they've taken
+ * Sub-Professional ones on the Reviewer page.
  */
-async function resolveBestSource(userId) {
-  const mocks = await getRecentFullMocks(userId, 3);
+async function resolveBestSource(userId, examLevel = null) {
+  const mocks = await getRecentFullMocks(userId, 3, examLevel);
 
   if (mocks.length >= 2) {
     return { source: "recent_full_mocks", attempts: mocks };
@@ -70,7 +93,7 @@ async function resolveBestSource(userId) {
     return { source: "latest_full_mock", attempts: mocks };
   }
 
-  const assessment = await getLatestAssessmentAttempt(userId);
+  const assessment = await getLatestAssessmentAttempt(userId, examLevel);
   if (assessment) {
     return { source: "assessment", attempts: [assessment] };
   }
@@ -79,10 +102,18 @@ async function resolveBestSource(userId) {
 }
 
 /**
- * Derive examLevel ("professional"|"subprofessional") from the most recent
- * mock or assessment. Defaults to "professional" when no signal is available.
+ * Derive examLevel ("professional"|"subprofessional"). The user's saved
+ * preference (User.examType, set during onboarding or from Account Settings)
+ * is the source of truth — the dashboard must reflect what the user picked
+ * regardless of which exams they've taken since. Falls back to inferring
+ * from the latest mock/assessment for legacy users with no preference yet.
  */
 async function detectExamLevel(userId) {
+  const user = await User.findById(userId).select("examType").lean();
+  if (user?.examType === "professional" || user?.examType === "subprofessional") {
+    return user.examType;
+  }
+
   const mocks = await getRecentFullMocks(userId, 1);
   const newest = mocks[0] || (await getLatestAssessmentAttempt(userId));
   if (!newest) return "professional";
@@ -155,8 +186,17 @@ function aggregateAcrossAttempts(attempts) {
  * One-shot bundle used by every dashboard service.
  */
 async function getDashboardSourceBundle(userId) {
+  // Resolve the user's preferred track first so the source query can filter
+  // attempts to that track only. Users with no preference (legacy accounts)
+  // pass `null` here and see all attempts, preserving prior behavior.
+  const user = await User.findById(userId).select("examType").lean();
+  const preferredLevel =
+    user?.examType === "professional" || user?.examType === "subprofessional"
+      ? user.examType
+      : null;
+
   const [{ source, attempts }, level] = await Promise.all([
-    resolveBestSource(userId),
+    resolveBestSource(userId, preferredLevel),
     detectExamLevel(userId),
   ]);
 

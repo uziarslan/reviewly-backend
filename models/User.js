@@ -72,6 +72,15 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Civil Service Exam track the user is preparing for. Drives the dashboard
+    // section breakdown, sprint generation, and mock recommendations regardless
+    // of which exams they actually take on the Reviewer page. Null until the
+    // user picks one (during onboarding) or changes it from Account Settings.
+    examType: {
+      type: String,
+      enum: ["professional", "subprofessional", null],
+      default: null,
+    },
     // Optional exam date used by the Readiness Checker to show "days before CSE".
     // When null the days block is hidden.
     examDate: {

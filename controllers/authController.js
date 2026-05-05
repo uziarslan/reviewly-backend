@@ -132,6 +132,8 @@ exports.googleLogin = async (req, res, next) => {
         subscription: user.subscription,
         marketingEmails: user.marketingEmails,
         trialAssessment: user.trialAssessment,
+        examType: user.examType,
+        examDate: user.examDate,
       },
     });
   } catch (err) {
@@ -195,6 +197,8 @@ exports.googleCodeLogin = async (req, res, next) => {
         subscription: user.subscription,
         marketingEmails: user.marketingEmails,
         trialAssessment: user.trialAssessment,
+        examType: user.examType,
+        examDate: user.examDate,
       },
     });
   } catch (err) {
@@ -215,7 +219,7 @@ exports.getMe = async (req, res) => {
  */
 exports.updateMe = async (req, res, next) => {
   try {
-    const { firstName, lastName, marketingEmails, examDate } = req.body;
+    const { firstName, lastName, marketingEmails, examDate, examType } = req.body;
 
     const user = await User.findById(req.user._id);
     if (!user) {
@@ -227,6 +231,15 @@ exports.updateMe = async (req, res, next) => {
     if (firstName !== undefined) user.firstName = firstName;
     if (lastName !== undefined) user.lastName = lastName;
     if (marketingEmails !== undefined) user.marketingEmails = marketingEmails;
+    if (examType !== undefined) {
+      if (examType === null || examType === "professional" || examType === "subprofessional") {
+        user.examType = examType || null;
+      } else {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid examType" });
+      }
+    }
     if (examDate !== undefined) {
       if (examDate === null || examDate === "") {
         user.examDate = null;
