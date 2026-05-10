@@ -1,6 +1,8 @@
 const SprintPlan = require("../models/SprintPlan");
 const Question = require("../models/Question");
 const Setting = require("../models/Setting");
+const Attempt = require("../models/Attempt");
+const Reviewer = require("../models/Reviewer");
 const logger = require("../utils/logger");
 const { isPremiumActive, publicPlanState } = require("../utils/premium");
 
@@ -81,22 +83,91 @@ function publicPlanShape(plan) {
   };
 }
 
-async function getActivePlan(userId) {
-  return SprintPlan.findOne({ user: userId, status: "active" });
+async function getActivePlan(userId, examLevel) {
+  const filter = { user: userId, status: "active" };
+  if (examLevel) filter.examLevel = examLevel;
+  return SprintPlan.findOne(filter);
 }
 
 /**
- * Latest plan to surface on the dashboard. Prefers the active plan if any,
- * falling back to the most recently completed plan so State E (plan done)
- * keeps rendering until the user explicitly regenerates.
+ * Most recent plan for the user, optionally scoped to a specific exam level.
+ * Passing examLevel ensures plans from a different track don't interfere with
+ * generation gates or the dashboard display.
  */
-async function getDisplayPlan(userId) {
-  const active = await SprintPlan.findOne({ user: userId, status: "active" });
-  if (active) return active;
-  return SprintPlan.findOne({
+async function getMostRecentPlan(userId, examLevel) {
+  const filter = { user: userId };
+  if (examLevel) filter.examLevel = examLevel;
+  return SprintPlan.findOne(filter)
+    .sort({ createdAt: -1 })
+    .select("createdAt status examLevel")
+    .lean();
+}
+
+/**
+ * True when the user has submitted a full mock matching `examLevel` after
+ * `since`. Used to gate sprint regeneration on a fresh re-assessment so
+ * regenerating actually produces a different plan.
+ */
+async function hasMockSince(userId, examLevel, since) {
+  if (!since) return false;
+  const candidates = await Attempt.find({
     user: userId,
-    status: "completed",
-  }).sort({ updatedAt: -1, createdAt: -1 });
+    status: { $in: ["submitted", "timed_out"] },
+    submittedAt: { $gt: since },
+  })
+    .populate({ path: "reviewer", select: "type examConfig slug" })
+    .select("reviewer submittedAt")
+    .lean();
+
+  return candidates.some((a) => {
+    if (a.reviewer?.type !== "mock") return false;
+    const levels = a.reviewer?.examConfig?.examLevel || [];
+    if (levels.includes(examLevel)) return true;
+    const slug = a.reviewer?.slug || "";
+    if (examLevel === "subprofessional" && slug.includes("subprofessional")) return true;
+    if (examLevel === "professional" && slug.includes("professional") && !slug.includes("subprofessional")) return true;
+    return false;
+  });
+}
+
+/**
+ * Decide whether the dashboard should let the user regenerate a sprint plan.
+ * Returns `{ canRegenerate, reason }`.
+ *
+ * Rules:
+ *  - No prior plan ever → not applicable here (the "Generate" button handles it).
+ *  - Active plan exists → blocked (user is mid-sprint).
+ *  - Plan completed/abandoned but no fresh mock submitted since → blocked
+ *    with reason "needs_new_mock". Forces the user to retake a mock first
+ *    so the regenerated plan reflects new performance, not a duplicate.
+ *  - Plan completed/abandoned AND a matching mock was submitted since → unlocked.
+ */
+async function evaluateRegenerateGate(userId, examLevel) {
+  const recent = await getMostRecentPlan(userId, examLevel);
+  if (!recent) return { canRegenerate: false, reason: "no_prior_plan" };
+  if (recent.status === "active") {
+    return { canRegenerate: false, reason: "active_plan_in_progress" };
+  }
+  const fresh = await hasMockSince(userId, examLevel, recent.createdAt);
+  return fresh
+    ? { canRegenerate: true, reason: "ready" }
+    : { canRegenerate: false, reason: "needs_new_mock" };
+}
+
+/**
+ * Latest plan to surface on the dashboard, scoped to the user's current exam
+ * level. Prefers the active plan, falling back to the most recently completed
+ * plan so State E keeps rendering until the user explicitly regenerates.
+ * Scoping by examLevel prevents plans from a previous track from appearing
+ * after an exam-type switch.
+ */
+async function getDisplayPlan(userId, examLevel) {
+  const filter = { user: userId };
+  if (examLevel) filter.examLevel = examLevel;
+  const active = await SprintPlan.findOne({ ...filter, status: "active" });
+  if (active) return active;
+  return SprintPlan.findOne({ ...filter, status: "completed" })
+    .sort({ updatedAt: -1, createdAt: -1 });
 }
 
 // ─── GET /api/dashboard ─────────────────────────────
@@ -109,7 +180,8 @@ exports.getDashboard = async (req, res, next) => {
     const sectionBreakdown = buildSectionBreakdown(bundle);
     const recommendedFocus = buildRecommendedFocus(bundle);
 
-    const plan = await getDisplayPlan(req.user._id);
+    const plan = await getDisplayPlan(req.user._id, bundle.level);
+    const regenerate = await evaluateRegenerateGate(req.user._id, bundle.level);
 
     res.json({
       success: true,
@@ -122,6 +194,7 @@ exports.getDashboard = async (req, res, next) => {
         sectionBreakdown,
         recommendedFocus,
         sprintPlan: publicPlanShape(plan),
+        sprintRegenerate: regenerate,
         plan: publicPlanState(req.user),
       },
     });
@@ -142,8 +215,8 @@ exports.generateSprint = async (req, res, next) => {
       });
     }
 
-    // Block duplicate active plans.
-    const existing = await getActivePlan(req.user._id);
+    // Block duplicate active plans (scoped to current exam level).
+    const existing = await getActivePlan(req.user._id, bundle.level);
     if (existing) {
       return res.json({
         success: true,
@@ -152,21 +225,30 @@ exports.generateSprint = async (req, res, next) => {
       });
     }
 
-    // Free users may generate the first sprint preview, but cannot regenerate
-    // a fresh plan after completing one — that's a premium feature.
-    if (!isPremiumActive(req.user)) {
-      const completedPlan = await SprintPlan.findOne({
-        user: req.user._id,
-        status: "completed",
-      })
-        .select("_id")
-        .lean();
-      if (completedPlan) {
+    // If the user has previously *completed* a plan, regeneration is gated on
+    // having submitted a fresh full mock since that plan was created. Without
+    // new performance data, the generator is deterministic and would produce
+    // the same plan — so we lead the user back to a mock first.
+    // Abandoned plans (e.g. from an exam-type switch) do NOT trigger this gate;
+    // those are treated as a fresh start.
+    const priorPlan = await getMostRecentPlan(req.user._id, bundle.level);
+    if (priorPlan && priorPlan.status === "completed") {
+      // Free users still hit the premium gate first.
+      if (!isPremiumActive(req.user)) {
         return res.status(402).json({
           success: false,
           code: "premium_required",
           feature: "regenerate_sprint_after_completion",
           message: "Unlock Premium to regenerate a fresh 7-day plan.",
+        });
+      }
+      const fresh = await hasMockSince(req.user._id, bundle.level, priorPlan.createdAt);
+      if (!fresh) {
+        return res.status(400).json({
+          success: false,
+          code: "needs_new_mock",
+          message:
+            "Take a full mock exam first to reassess your progress. Your next plan will reflect your new performance.",
         });
       }
     }

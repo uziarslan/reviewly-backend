@@ -3,6 +3,7 @@ const Reviewer = require("../models/Reviewer");
 const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
 const User = require("../models/User");
+const SprintPlan = require("../models/SprintPlan");
 
 // ─── helpers (shared with examController) ────────
 
@@ -481,6 +482,31 @@ exports.submitTrialExam = async (req, res, next) => {
     await User.findByIdAndUpdate(req.user._id, {
       $set: { trialAssessment: true },
     });
+
+    // Submitting a trial assessment is a "fresh start" signal — the user is
+    // (re)diagnosing their level. Any prior active/completed sprint plans for
+    // their current exam track were built off old performance data, so
+    // abandon them. This unblocks first/regenerate flows on the dashboard
+    // since the regen gate only fires when a *completed* plan exists.
+    // (Abandoned plans are excluded from getDisplayPlan and the gate.)
+    const reviewerLevels = attempt.reviewer?.examConfig?.examLevel || [];
+    const slug = attempt.reviewer?.slug || "";
+    let level = null;
+    if (reviewerLevels.includes("subprofessional") && !reviewerLevels.includes("professional")) {
+      level = "subprofessional";
+    } else if (reviewerLevels.includes("professional") && !reviewerLevels.includes("subprofessional")) {
+      level = "professional";
+    } else if (slug.includes("subprofessional")) {
+      level = "subprofessional";
+    } else if (slug.includes("professional")) {
+      level = "professional";
+    }
+    if (level) {
+      await SprintPlan.updateMany(
+        { user: req.user._id, examLevel: level, status: { $in: ["active", "completed"] } },
+        { $set: { status: "abandoned" } }
+      );
+    }
 
     res.json({
       success: true,

@@ -1,5 +1,6 @@
 const { OAuth2Client } = require("google-auth-library");
 const User = require("../models/User");
+const SprintPlan = require("../models/SprintPlan");
 const generateToken = require("../utils/generateToken");
 const posthog = require("../services/posthog");
 
@@ -231,9 +232,14 @@ exports.updateMe = async (req, res, next) => {
     if (firstName !== undefined) user.firstName = firstName;
     if (lastName !== undefined) user.lastName = lastName;
     if (marketingEmails !== undefined) user.marketingEmails = marketingEmails;
+
+    // Track exam-type changes so we can clean up dependent state below.
+    let examTypeChanged = false;
     if (examType !== undefined) {
       if (examType === null || examType === "professional" || examType === "subprofessional") {
-        user.examType = examType || null;
+        const next = examType || null;
+        examTypeChanged = next !== user.examType;
+        user.examType = next;
       } else {
         return res
           .status(400)
@@ -250,6 +256,20 @@ exports.updateMe = async (req, res, next) => {
     }
 
     await user.save();
+
+    // Switching exam tracks invalidates the active sprint — it was planned
+    // against the previous track's sections/topics. Mark it abandoned so the
+    // dashboard restarts cleanly on the new track.
+    if (examTypeChanged) {
+      // Abandon both active and completed plans — switching tracks makes the
+      // old plan irrelevant; the user must generate a fresh one for their new
+      // track after taking an assessment or mock on that track.
+      await SprintPlan.updateMany(
+        { user: user._id, status: { $in: ["active", "completed"] } },
+        { $set: { status: "abandoned" } }
+      );
+    }
+
     res.json({ success: true, user });
   } catch (err) {
     next(err);
