@@ -67,6 +67,7 @@ app.use("/api/trial-assessment", require("./routes/trialAssessment"));
 app.use("/api/support", require("./routes/support"));
 app.use("/api/dashboard", require("./routes/dashboard"));
 app.use("/api/payments", require("./routes/payments"));
+app.use("/api/whats-new", require("./routes/whatsNew"));
 
 // ── Admin: Manual sync trigger ──────────────────
 app.post("/api/admin/sync-questions", async (req, res, next) => {

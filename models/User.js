@@ -87,6 +87,12 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Last time the user opened the What's New page. Drives the yellow-dot
+    // notification indicator (unread = a published entry newer than this).
+    whatsNewSeenAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
