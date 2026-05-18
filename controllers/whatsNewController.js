@@ -9,6 +9,12 @@ function toBool(v) {
   return v === true || v === "true" || v === "1";
 }
 
+function parsePublishDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 /** Public-facing shape (no Cloudinary internals). */
 function publicEntry(doc) {
   return {
@@ -62,6 +68,9 @@ exports.createPost = async (req, res, next) => {
     }
 
     const isPublished = status === "published";
+    const publishedAt = isPublished
+      ? parsePublishDate(req.body.publishedAt) || new Date()
+      : null;
 
     const entry = await WhatsNew.create({
       type,
@@ -71,7 +80,7 @@ exports.createPost = async (req, res, next) => {
       imageUrl: req.file?.path || "",
       imagePublicId: req.file?.filename || "",
       status: isPublished ? "published" : "draft",
-      publishedAt: isPublished ? new Date() : null,
+      publishedAt,
       createdBy: req.user._id,
     });
 
@@ -130,20 +139,24 @@ exports.updatePost = async (req, res, next) => {
       entry.imageUrl = req.file.path;
       entry.imagePublicId = req.file.filename;
       if (oldPublicId) {
-        cloudinary.uploader.destroy(oldPublicId).catch(() => {});
+        cloudinary.uploader.destroy(oldPublicId).catch(() => { });
       }
     } else if (toBool(req.body.removeImage)) {
       entry.imageUrl = "";
       entry.imagePublicId = "";
       if (oldPublicId) {
-        cloudinary.uploader.destroy(oldPublicId).catch(() => {});
+        cloudinary.uploader.destroy(oldPublicId).catch(() => { });
       }
     }
 
+    const parsedPublishedAt = parsePublishDate(req.body.publishedAt);
     if (status !== undefined) {
       if (status === "published") {
         entry.status = "published";
-        // Keep the original publish date stable across re-publishes.
+        if (parsedPublishedAt) {
+          entry.publishedAt = parsedPublishedAt;
+        }
+        // Keep the original publish date stable unless a new one is supplied.
         if (!entry.publishedAt) entry.publishedAt = new Date();
       } else {
         entry.status = "draft";
@@ -169,7 +182,7 @@ exports.deletePost = async (req, res, next) => {
         .json({ success: false, message: "Entry not found" });
     }
     if (entry.imagePublicId) {
-      cloudinary.uploader.destroy(entry.imagePublicId).catch(() => {});
+      cloudinary.uploader.destroy(entry.imagePublicId).catch(() => { });
     }
     res.json({ success: true, message: "Entry deleted" });
   } catch (err) {
