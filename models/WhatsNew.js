@@ -49,6 +49,13 @@ const whatsNewSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Internal timestamp used for unread-dot logic. Unlike publishedAt,
+    // this always captures the real first publish moment (with time), so
+    // date-only admin inputs do not suppress unread indicators.
+    publishedMarkerAt: {
+      type: Date,
+      default: null,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -58,6 +65,6 @@ const whatsNewSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-whatsNewSchema.index({ status: 1, publishedAt: -1 });
+whatsNewSchema.index({ status: 1, publishedMarkerAt: -1, publishedAt: -1 });
 
 module.exports = mongoose.model("WhatsNew", whatsNewSchema);

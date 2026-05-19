@@ -86,7 +86,33 @@ function publicPlanShape(plan) {
 async function getActivePlan(userId, examLevel) {
   const filter = { user: userId, status: "active" };
   if (examLevel) filter.examLevel = examLevel;
-  return SprintPlan.findOne(filter);
+  return SprintPlan.findOne(filter).sort({ updatedAt: -1, createdAt: -1 });
+}
+
+/**
+ * Resolve the active sprint plan + task for a request taskId.
+ *
+ * Priority:
+ *  1) active plan scoped to current dashboard exam level (if provided)
+ *  2) newest active plan that contains the taskId (legacy/multi-plan safety)
+ */
+async function resolveActiveTaskContext(userId, taskId, examLevel) {
+  if (!taskId) return { plan: null, task: null };
+
+  const scopedPlan = await getActivePlan(userId, examLevel);
+  if (scopedPlan) {
+    const scopedTask = scopedPlan.tasks.find((t) => t.taskId === taskId);
+    if (scopedTask) return { plan: scopedPlan, task: scopedTask };
+  }
+
+  const activePlans = await SprintPlan.find({ user: userId, status: "active" })
+    .sort({ updatedAt: -1, createdAt: -1 });
+  for (const p of activePlans) {
+    const t = p.tasks.find((task) => task.taskId === taskId);
+    if (t) return { plan: p, task: t };
+  }
+
+  return { plan: scopedPlan || null, task: null };
 }
 
 /**
@@ -310,12 +336,16 @@ exports.startSprintTask = async (req, res, next) => {
       });
     }
 
-    const plan = await getActivePlan(req.user._id);
+    const bundle = await getDashboardSourceBundle(req.user._id);
+    const { plan, task } = await resolveActiveTaskContext(
+      req.user._id,
+      req.params.taskId,
+      bundle.level
+    );
+
     if (!plan) {
       return res.status(404).json({ success: false, message: "No active sprint plan" });
     }
-
-    const task = plan.tasks.find((t) => t.taskId === req.params.taskId);
     if (!task) {
       return res.status(404).json({ success: false, message: "Task not found in plan" });
     }
@@ -420,12 +450,16 @@ exports.submitSprintTask = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Missing answers" });
     }
 
-    const plan = await getActivePlan(req.user._id);
+    const bundle = await getDashboardSourceBundle(req.user._id);
+    const { plan, task } = await resolveActiveTaskContext(
+      req.user._id,
+      req.params.taskId,
+      bundle.level
+    );
+
     if (!plan) {
       return res.status(404).json({ success: false, message: "No active sprint plan" });
     }
-
-    const task = plan.tasks.find((t) => t.taskId === req.params.taskId);
     if (!task) {
       return res.status(404).json({ success: false, message: "Task not found in plan" });
     }
@@ -530,12 +564,16 @@ exports.submitSprintTask = async (req, res, next) => {
 // ─── GET /api/dashboard/sprint/tasks/:taskId/review ───
 exports.getSprintTaskReview = async (req, res, next) => {
   try {
-    const plan = await getActivePlan(req.user._id);
+    const bundle = await getDashboardSourceBundle(req.user._id);
+    const { plan, task } = await resolveActiveTaskContext(
+      req.user._id,
+      req.params.taskId,
+      bundle.level
+    );
+
     if (!plan) {
       return res.status(404).json({ success: false, message: "No active sprint plan" });
     }
-
-    const task = plan.tasks.find((t) => t.taskId === req.params.taskId);
     if (!task) {
       return res.status(404).json({ success: false, message: "Task not found in plan" });
     }
@@ -614,12 +652,16 @@ exports.saveSprintTaskAnswer = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "Invalid answer" });
     }
 
-    const plan = await getActivePlan(req.user._id);
+    const bundle = await getDashboardSourceBundle(req.user._id);
+    const { plan, task } = await resolveActiveTaskContext(
+      req.user._id,
+      req.params.taskId,
+      bundle.level
+    );
+
     if (!plan) {
       return res.status(404).json({ success: false, message: "No active sprint plan" });
     }
-
-    const task = plan.tasks.find((t) => t.taskId === req.params.taskId);
     if (!task || task.status === "completed") {
       return res.status(404).json({ success: false, message: "Task not available" });
     }

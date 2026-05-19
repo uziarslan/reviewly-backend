@@ -81,6 +81,7 @@ exports.createPost = async (req, res, next) => {
       imagePublicId: req.file?.filename || "",
       status: isPublished ? "published" : "draft",
       publishedAt,
+      publishedMarkerAt: isPublished ? new Date() : null,
       createdBy: req.user._id,
     });
 
@@ -158,6 +159,8 @@ exports.updatePost = async (req, res, next) => {
         }
         // Keep the original publish date stable unless a new one is supplied.
         if (!entry.publishedAt) entry.publishedAt = new Date();
+        // Keep first publish marker stable across unpublish/re-publish.
+        if (!entry.publishedMarkerAt) entry.publishedMarkerAt = new Date();
       } else {
         entry.status = "draft";
       }
@@ -215,17 +218,24 @@ exports.listPublished = async (_req, res, next) => {
  */
 exports.getUnread = async (req, res, next) => {
   try {
-    const latest = await WhatsNew.findOne({ status: "published" })
-      .sort({ publishedAt: -1 })
-      .select("publishedAt")
+    const docs = await WhatsNew.find({ status: "published" })
+      .select("publishedMarkerAt publishedAt createdAt")
       .lean();
 
-    if (!latest || !latest.publishedAt) {
+    const latestPublishedTs = docs.reduce((latest, doc) => {
+      const marker = doc?.publishedMarkerAt ? new Date(doc.publishedMarkerAt).getTime() : 0;
+      const published = doc?.publishedAt ? new Date(doc.publishedAt).getTime() : 0;
+      const created = doc?.createdAt ? new Date(doc.createdAt).getTime() : 0;
+      const candidate = Math.max(marker, published, created);
+      return candidate > latest ? candidate : latest;
+    }, 0);
+
+    if (!latestPublishedTs) {
       return res.json({ success: true, hasUnread: false });
     }
 
     const seenAt = req.user.whatsNewSeenAt;
-    const hasUnread = !seenAt || new Date(latest.publishedAt) > new Date(seenAt);
+    const hasUnread = !seenAt || latestPublishedTs > new Date(seenAt).getTime();
     res.json({ success: true, hasUnread });
   } catch (err) {
     next(err);
