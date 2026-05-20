@@ -5,6 +5,7 @@ const {
   SECTION_WEIGHTS,
   expandTopicVariants,
   canonicalTopic,
+  prettySection,
 } = require("./examStructure");
 
 /** Default difficulty distribution per task type. */
@@ -58,6 +59,84 @@ function getActiveSprintQuestionIds(plan, excludeTaskId) {
   return ids;
 }
 
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Count approved questions in (section, examLevel) for a single topic. */
+async function countQuestionsForTopic(topic, section, examLevel) {
+  const variants = expandTopicVariants([topic]);
+  const regexes = variants.map((n) => new RegExp(`^${escapeRegex(n)}$`, "i"));
+  return Question.countDocuments({
+    status: "approved",
+    examFamily: "cse",
+    examLevel: { $in: [examLevel, "both"] },
+    section,
+    topic: { $in: regexes },
+  });
+}
+
+/**
+ * For topic-based tasks, swap any topic that has zero approved questions in
+ * the bank for a different topic in the same section that does. Avoids topics
+ * already assigned to other tasks in the plan so the sprint doesn't duplicate.
+ *
+ * Mutates nothing; returns `{ topics, changed }`. Caller is responsible for
+ * persisting the new topics + title on the plan.
+ */
+async function resolveTopicsWithCoverage(task, examLevel, plan) {
+  const original = task.topics || [];
+  if (original.length === 0) return { topics: original, changed: false };
+
+  // Topics already used elsewhere in this plan — skip to avoid duplicates.
+  const usedElsewhere = new Set();
+  for (const t of plan?.tasks || []) {
+    if (t.taskId === task.taskId) continue;
+    for (const topic of t.topics || []) {
+      const c = canonicalTopic(topic);
+      if (c) usedElsewhere.add(c);
+    }
+  }
+
+  // Distinct topics that actually have approved questions in this section.
+  const rawTopics = await Question.distinct("topic", {
+    status: "approved",
+    examFamily: "cse",
+    examLevel: { $in: [examLevel, "both"] },
+    section: task.section,
+  });
+  const available = Array.from(
+    new Set(rawTopics.map((t) => canonicalTopic(t)).filter(Boolean))
+  );
+
+  const out = [];
+  let changed = false;
+
+  for (const topic of original) {
+    const count = await countQuestionsForTopic(topic, task.section, examLevel);
+    if (count > 0) {
+      out.push(topic);
+      continue;
+    }
+    // Need a replacement. Prefer one not used elsewhere and not already chosen.
+    const chosenHere = new Set(out.map((t) => canonicalTopic(t)));
+    const strict = available.find(
+      (t) => !usedElsewhere.has(t) && !chosenHere.has(t)
+    );
+    const replacement = strict || available.find((t) => !chosenHere.has(t)) || null;
+    if (replacement) {
+      out.push(replacement);
+      changed = true;
+    } else {
+      // No coverage anywhere in the section — keep original; caller will hit
+      // the section-wide safety net or surface a 404.
+      out.push(topic);
+    }
+  }
+
+  return { topics: out, changed };
+}
+
 /**
  * Pull eligible questions from the bank for this task.
  */
@@ -81,13 +160,16 @@ async function fetchEligiblePool(task, examLevel) {
     // insensitively so casing differences in the DB don't drop questions.
     if (task.topics && task.topics.length > 0) {
       const topicNames = expandTopicVariants(task.topics);
-      const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regexes = topicNames.map((n) => new RegExp(`^${escape(n)}$`, "i"));
-      return Question.find({
+      const regexes = topicNames.map((n) => new RegExp(`^${escapeRegex(n)}$`, "i"));
+      const topicPool = await Question.find({
         ...baseFilter,
         section: task.section,
         topic: { $in: regexes },
       }).lean();
+      if (topicPool.length > 0) return topicPool;
+      // Coverage gap: the assigned topic has no approved questions in the
+      // bank. Fall back to the broader section so the user still gets
+      // practice in the same weak area instead of a blocked task.
     }
   }
 
@@ -252,6 +334,25 @@ function selectMixedSections(pool, count, examLevel, targets) {
  * @returns {Promise<{ questions: Question[], difficultyMix }>}
  */
 async function generatePracticeSet({ task, examLevel, plan }) {
+  // Topic-based tasks: if the assigned topic has no questions, swap it for
+  // another topic in the same section that does. Rewrites the task in place
+  // so the caller can persist via plan.save().
+  if (
+    (task.type === "topic_practice" || task.type === "reinforcement_dual_topic") &&
+    task.topics?.length > 0
+  ) {
+    const resolved = await resolveTopicsWithCoverage(task, examLevel, plan);
+    if (resolved.changed) {
+      task.topics = resolved.topics;
+      // Mirror sprintEngine.buildTitle so the UI matches what we deliver.
+      if (task.type === "topic_practice") {
+        task.title = `${task.topics[0]} Practice`;
+      } else if (task.type === "reinforcement_dual_topic") {
+        task.title = `${prettySection(task.section)} Reinforcement Drill`;
+      }
+    }
+  }
+
   const targets = getDifficultyTargets(task.type, task.questionCount);
   const pool = await fetchEligiblePool(task, examLevel);
 

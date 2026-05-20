@@ -367,6 +367,12 @@ exports.startSprintTask = async (req, res, next) => {
         examLevel: plan.examLevel,
         plan,
       });
+      if (!picked || picked.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "No practice questions available for this task yet.",
+        });
+      }
       questions = picked;
       task.attempt = {
         questionIds: picked.map((q) => q._id),
