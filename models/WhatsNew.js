@@ -10,7 +10,7 @@ const whatsNewSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["new", "improved", "bugfix"],
+      enum: ["new", "improved", "bugfix", "announcement"],
       required: true,
     },
     // Whether to show the "BASED ON USER FEEDBACK" pill.

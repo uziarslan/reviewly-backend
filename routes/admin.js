@@ -11,6 +11,8 @@ const {
   deleteUser,
   getCseExamDate,
   updateCseExamDate,
+  getAnnouncement,
+  updateAnnouncement,
 } = require("../controllers/adminController");
 const {
   getOverview,
@@ -75,6 +77,8 @@ router.delete("/users/:id", protect, admin, deleteUser);
 // ── App settings (admin only) ──
 router.get("/settings/exam-date", protect, admin, getCseExamDate);
 router.put("/settings/exam-date", protect, admin, updateCseExamDate);
+router.get("/settings/announcement", protect, admin, getAnnouncement);
+router.put("/settings/announcement", protect, admin, updateAnnouncement);
 
 // ── What's New (admin only) ──
 router.get("/whats-new", protect, admin, listAdmin);

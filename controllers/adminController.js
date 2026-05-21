@@ -4,6 +4,7 @@ const Setting = require("../models/Setting");
 const generateToken = require("../utils/generateToken");
 
 const SETTING_KEY_CSE_EXAM_DATE = "cseExamDate";
+const SETTING_KEY_ANNOUNCEMENT = "announcement";
 
 /* ──────────────────────────────────────────────
    AUTH
@@ -242,6 +243,61 @@ exports.updateCseExamDate = async (req, res, next) => {
         cseExamDate: doc?.value ? new Date(doc.value).toISOString() : null,
         updatedAt: doc?.updatedAt || null,
         updatedBy: doc?.updatedBy || null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ──────────────────────────────────────────────
+   ANNOUNCEMENT BANNER
+   ────────────────────────────────────────────── */
+
+/**
+ * GET /api/admin/settings/announcement  (admin)
+ * GET /api/settings/announcement        (public)
+ */
+exports.getAnnouncement = async (_req, res, next) => {
+  try {
+    const doc = await Setting.findOne({ key: SETTING_KEY_ANNOUNCEMENT });
+    res.json({
+      success: true,
+      data: {
+        text: doc?.value?.text || null,
+        enabled: doc?.value?.enabled ?? false,
+        updatedAt: doc?.updatedAt || null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PUT /api/admin/settings/announcement
+ * Body: { text: string | null, enabled: boolean }
+ */
+exports.updateAnnouncement = async (req, res, next) => {
+  try {
+    const { text, enabled } = req.body || {};
+    const valueToStore = {
+      text: text && text.trim() ? text.trim() : null,
+      enabled: enabled === true,
+    };
+
+    const doc = await Setting.findOneAndUpdate(
+      { key: SETTING_KEY_ANNOUNCEMENT },
+      { $set: { value: valueToStore, updatedBy: req.user._id } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        text: doc?.value?.text || null,
+        enabled: doc?.value?.enabled ?? false,
+        updatedAt: doc?.updatedAt || null,
       },
     });
   } catch (err) {

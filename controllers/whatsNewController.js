@@ -2,7 +2,7 @@ const WhatsNew = require("../models/WhatsNew");
 const User = require("../models/User");
 const { cloudinary } = require("../cloudinary");
 
-const VALID_TYPES = ["new", "improved", "bugfix"];
+const VALID_TYPES = ["new", "improved", "bugfix", "announcement"];
 
 /** Coerce a multipart string ("true"/"false"/"1") or boolean into a boolean. */
 function toBool(v) {

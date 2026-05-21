@@ -36,7 +36,7 @@ const baseOptions = {
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 50,
   store,
   ...baseOptions,
 });
