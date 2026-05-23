@@ -30,6 +30,8 @@ const { buildRecommendedFocus } = require("../services/dashboard/recommendedFocu
 const { generateSprintPlan } = require("../services/dashboard/sprintEngine");
 const { generatePracticeSet } = require("../services/dashboard/practiceSet");
 const { prettySection, canonicalTopic } = require("../services/dashboard/examStructure");
+const { buildProgressGraph } = require("../services/dashboard/progressGraph");
+const { buildMockStats } = require("../services/dashboard/mockStats");
 
 /**
  * Trim a SprintPlan document to a client-safe shape (no question IDs/answers).
@@ -202,12 +204,24 @@ exports.getDashboard = async (req, res, next) => {
   try {
     const bundle = await getDashboardSourceBundle(req.user._id);
     const examDate = await resolveExamDate(req.user);
-    const readiness = buildReadinessPayload(bundle, examDate);
-    const sectionBreakdown = buildSectionBreakdown(bundle);
-    const recommendedFocus = buildRecommendedFocus(bundle);
 
-    const plan = await getDisplayPlan(req.user._id, bundle.level);
-    const regenerate = await evaluateRegenerateGate(req.user._id, bundle.level);
+    const [
+      readiness,
+      sectionBreakdown,
+      recommendedFocus,
+      plan,
+      regenerate,
+      progressGraph,
+      mockStats,
+    ] = await Promise.all([
+      Promise.resolve(buildReadinessPayload(bundle, examDate)),
+      Promise.resolve(buildSectionBreakdown(bundle)),
+      Promise.resolve(buildRecommendedFocus(bundle)),
+      getDisplayPlan(req.user._id, bundle.level),
+      evaluateRegenerateGate(req.user._id, bundle.level),
+      buildProgressGraph(req.user._id, bundle.level),
+      buildMockStats(req.user._id, bundle.level),
+    ]);
 
     res.json({
       success: true,
@@ -222,6 +236,8 @@ exports.getDashboard = async (req, res, next) => {
         sprintPlan: publicPlanShape(plan),
         sprintRegenerate: regenerate,
         plan: publicPlanState(req.user),
+        progressGraph,
+        mockStats,
       },
     });
   } catch (err) {

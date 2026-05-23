@@ -69,6 +69,9 @@ const attemptSchema = new mongoose.Schema(
     submittedAt: { type: Date, default: null },
     // remaining time in seconds when paused (for resume)
     remainingSeconds: { type: Number, default: null },
+    // Last time the client confirmed the timer was actively ticking (via saveAnswer/beacon).
+    // Cleared on pause. Used on resume to subtract elapsed time since last sync.
+    tickedAt: { type: Date, default: null },
     // Results (filled on submission)
     result: {
       totalItems: { type: Number, default: 0 },
@@ -119,8 +122,12 @@ const attemptSchema = new mongoose.Schema(
 );
 
 attemptSchema.index({ user: 1, reviewer: 1, status: 1 });
-// Unique constraint: one attempt per user per reviewer
-attemptSchema.index({ user: 1, reviewer: 1 }, { unique: true });
+attemptSchema.index({ user: 1, reviewer: 1, createdAt: -1 });
 attemptSchema.index({ shareToken: 1 }, { unique: true, sparse: true });
+// Prevents duplicate in-progress attempts for the same user+reviewer (guards against race conditions)
+attemptSchema.index(
+  { user: 1, reviewer: 1 },
+  { unique: true, partialFilterExpression: { status: 'in_progress' }, name: 'user_reviewer_in_progress_unique' }
+);
 
 module.exports = mongoose.model("Attempt", attemptSchema);

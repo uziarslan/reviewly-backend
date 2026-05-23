@@ -107,16 +107,17 @@ exports.startExam = async (req, res, next) => {
         .json({ success: false, message: "Reviewer has no exam config" });
     }
 
-    // ── Single-entry logic: one attempt per user + reviewer ──
-    // Use findOne to check existing attempt
+    // Find any in-progress attempt for this user + reviewer
+    const forceRestart = req.body?.restart === true;
+    const retakeFrom = req.body?.retakeFrom || null;
     let attempt = await Attempt.findOne({
       user: req.user._id,
       reviewer: reviewer._id,
+      status: "in_progress",
     });
 
-    // If in_progress and not a restart, resume
-    const forceRestart = req.body?.restart === true;
-    if (!forceRestart && attempt && attempt.status === "in_progress") {
+    // Resume in-progress attempt unless caller explicitly wants a fresh start
+    if (!forceRestart && !retakeFrom && attempt) {
       await attempt.populate("questions");
       return res.json({
         success: true,
@@ -125,19 +126,40 @@ exports.startExam = async (req, res, next) => {
       });
     }
 
-    // Need new questions for first attempt or reattempt
+    // Delete the abandoned in-progress attempt so it doesn't pollute history
+    if ((forceRestart || retakeFrom) && attempt) {
+      await Attempt.deleteOne({ _id: attempt._id });
+    }
+
+    // Assemble questions for a new attempt
     let questionIds = [];
 
-    if (cfg.variant === "fixed") {
-      // Fixed exams reuse the same questions
-      if (attempt && attempt.questions.length > 0) {
-        questionIds = attempt.questions;
+    if (retakeFrom) {
+      // Retake: reuse the exact same questions in the same order from the specified attempt
+      const source = await Attempt.findOne({
+        _id: retakeFrom,
+        user: req.user._id,
+        reviewer: reviewer._id,
+      }).select("questions");
+      if (source && source.questions.length > 0) {
+        questionIds = source.questions;
+      } else {
+        const selected = await assembleDynamic(cfg);
+        questionIds = selected.map((q) => q._id);
+      }
+    } else if (cfg.variant === "fixed") {
+      // Fixed exams reuse the same question set across retakes — pull from any prior attempt
+      const prior = await Attempt.findOne({
+        user: req.user._id,
+        reviewer: reviewer._id,
+      }).sort({ createdAt: -1 }).select("questions");
+      if (prior && prior.questions.length > 0) {
+        questionIds = prior.questions;
       } else {
         const selected = await assembleDynamic(cfg);
         questionIds = selected.map((q) => q._id);
       }
     } else {
-      // Dynamic: new questions each attempt
       const selected = await assembleDynamic(cfg);
       questionIds = selected.map((q) => q._id);
     }
@@ -148,7 +170,9 @@ exports.startExam = async (req, res, next) => {
       isCorrect: false,
     }));
 
-    const resetData = {
+    const newAttemptData = {
+      user: req.user._id,
+      reviewer: reviewer._id,
       questions: questionIds,
       answers: answersArray,
       status: "in_progress",
@@ -170,50 +194,7 @@ exports.startExam = async (req, res, next) => {
       },
     };
 
-    if (attempt) {
-      // Reattempt: update existing record atomically
-      attempt = await Attempt.findOneAndUpdate(
-        { user: req.user._id, reviewer: reviewer._id },
-        { $set: resetData },
-        { new: true }
-      ).populate("questions");
-
-      if (!attempt) {
-        return res.status(500).json({ success: false, message: "Failed to update attempt" });
-      }
-
-      return res.status(200).json({
-        success: true,
-        data: formatAttemptForClient(attempt),
-      });
-    }
-
-    // First attempt: create new record with upsert to handle race conditions
-    try {
-      attempt = await Attempt.create({
-        user: req.user._id,
-        reviewer: reviewer._id,
-        ...resetData,
-      });
-    } catch (err) {
-      // Handle duplicate key error (race condition)
-      if (err.code === 11000) {
-        // Another request created it, fetch and return
-        attempt = await Attempt.findOne({
-          user: req.user._id,
-          reviewer: reviewer._id,
-        }).populate("questions");
-
-        if (attempt) {
-          return res.json({
-            success: true,
-            message: "Resuming existing attempt",
-            data: formatAttemptForClient(attempt),
-          });
-        }
-      }
-      throw err;
-    }
+    attempt = await createAttemptWithIndexFallback(newAttemptData);
 
     await attempt.populate("questions");
 
@@ -225,6 +206,53 @@ exports.startExam = async (req, res, next) => {
     next(err);
   }
 };
+
+/**
+ * Create an attempt with two self-healing fallbacks:
+ *
+ * 1. Legacy index (user_1_reviewer_1): drop it and retry — one-time migration.
+ * 2. Race-condition guard index (user_reviewer_in_progress_unique): a concurrent
+ *    request already created an in-progress attempt (e.g. React StrictMode double
+ *    effect). Return the existing one instead of failing.
+ */
+async function createAttemptWithIndexFallback(data) {
+  try {
+    return await Attempt.create(data);
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+
+    // ── Fallback 1: legacy unique index ──────────────────────────────────────
+    if (err.message && err.message.includes('user_1_reviewer_1')) {
+      logger.warn('Dropping legacy unique index user_1_reviewer_1 and retrying attempt creation');
+      try {
+        await Attempt.collection.dropIndex('user_1_reviewer_1');
+      } catch (dropErr) {
+        if (dropErr.codeName !== 'IndexNotFound') throw dropErr;
+      }
+      return await Attempt.create(data);
+    }
+
+    // ── Fallback 2: race on in-progress guard index ───────────────────────────
+    // A concurrent request beat us to creating the in-progress attempt.
+    // Match by keyPattern instead of index name so it's resilient to name changes.
+    const keyPattern = err.keyPattern || {};
+    const isInProgressRace =
+      keyPattern.user === 1 &&
+      keyPattern.reviewer === 1 &&
+      !keyPattern.status; // the partial index only covers {user, reviewer}
+
+    if (isInProgressRace) {
+      const existing = await Attempt.findOne({
+        user: data.user,
+        reviewer: data.reviewer,
+        status: 'in_progress',
+      });
+      if (existing) return existing;
+    }
+
+    throw err;
+  }
+}
 
 /**
  * Assemble questions dynamically based on exam config.
@@ -289,13 +317,31 @@ function formatAttemptForClient(attempt) {
     // DO NOT send correctAnswer, explanations – those come after submission
   }));
 
+  // Compute live remaining time on resume:
+  // - If tickedAt is set, the client previously confirmed the timer was running.
+  //   Subtract elapsed time since that last sync to reflect refreshes/closes.
+  // - If tickedAt is null but the attempt has no synced remaining yet (fresh attempt
+  //   that the user opened then immediately refreshed), fall back to startedAt math.
+  // - Otherwise (post-pause), trust the stored value.
+  let liveRemaining = attempt.remainingSeconds;
+  if (attempt.status === "in_progress" && Number.isFinite(attempt.remainingSeconds)) {
+    if (attempt.tickedAt) {
+      const elapsed = Math.floor((Date.now() - new Date(attempt.tickedAt).getTime()) / 1000);
+      liveRemaining = Math.max(0, attempt.remainingSeconds - Math.max(0, elapsed));
+    } else if (attempt.startedAt && !attempt.answers.some((a) => a.selectedAnswer)) {
+      // No tickedAt + no answers saved → still the initial server-set value. Use wall clock.
+      const elapsed = Math.floor((Date.now() - new Date(attempt.startedAt).getTime()) / 1000);
+      liveRemaining = Math.max(0, attempt.remainingSeconds - Math.max(0, elapsed));
+    }
+  }
+
   return {
     attemptId: attempt._id,
     reviewerId: attempt.reviewer,
     status: attempt.status,
     currentIndex: attempt.currentIndex,
     startedAt: attempt.startedAt,
-    remainingSeconds: attempt.remainingSeconds,
+    remainingSeconds: liveRemaining,
     totalQuestions: questions.length,
     questions,
     // Which questions user has answered + their answers
@@ -321,7 +367,7 @@ function formatAttemptForClient(attempt) {
 exports.saveAnswer = async (req, res, next) => {
   try {
     const { attemptId } = req.params;
-    const { questionIndex, selectedAnswer } = req.body;
+    const { questionIndex, selectedAnswer, remainingSeconds } = req.body;
 
     const attempt = await Attempt.findOne({
       _id: attemptId,
@@ -344,6 +390,10 @@ exports.saveAnswer = async (req, res, next) => {
     attempt.answers[questionIndex].selectedAnswer = selectedAnswer || null;
     attempt.currentIndex = questionIndex;
     attempt.markModified("answers");
+    if (Number.isFinite(remainingSeconds)) {
+      attempt.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
+      attempt.tickedAt = new Date();
+    }
     await attempt.save();
 
     res.json({ success: true });
@@ -371,10 +421,8 @@ exports.beaconSave = async (req, res) => {
     }
     const userId = decoded.id;
     const { attemptId } = req.params;
-    const answersMap = req.body?.answers;
-    if (!answersMap || typeof answersMap !== "object") {
-      return res.status(400).json({ success: false, message: "Invalid request" });
-    }
+    const answersMap = req.body?.answers || {};
+    const remainingSeconds = req.body?.remainingSeconds;
 
     const attempt = await Attempt.findOne({
       _id: attemptId,
@@ -392,6 +440,10 @@ exports.beaconSave = async (req, res) => {
       attempt.answers[questionIndex].selectedAnswer = selectedAnswer || null;
     }
     attempt.markModified("answers");
+    if (Number.isFinite(remainingSeconds)) {
+      attempt.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
+      attempt.tickedAt = new Date();
+    }
     await attempt.save();
 
     res.status(200).json({ success: true });
@@ -424,6 +476,8 @@ exports.pauseExam = async (req, res, next) => {
 
     if (remainingSeconds !== undefined) attempt.remainingSeconds = remainingSeconds;
     if (currentIndex !== undefined) attempt.currentIndex = currentIndex;
+    // Paused — timer is no longer "live"; clear tickedAt so resume doesn't subtract elapsed time.
+    attempt.tickedAt = null;
     await attempt.save();
 
     res.json({ success: true, message: "Exam paused" });
@@ -776,13 +830,13 @@ exports.getUserAttempts = async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
-    const filter = { user: req.user._id };
+    const filter = { user: req.user._id, status: { $ne: 'in_progress' } };
 
     const [attempts, total] = await Promise.all([
       Attempt.find(filter)
         .populate("reviewer", "title slug type")
         .select(
-          "reviewer status result.percentage result.passed result.correct result.totalItems currentIndex answers.selectedAnswer questions createdAt submittedAt remainingSeconds"
+          "reviewer status result.percentage result.passed result.correct result.totalItems result.duration createdAt submittedAt"
         )
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
@@ -796,22 +850,16 @@ exports.getUserAttempts = async (req, res, next) => {
       (a) => a.reviewer?.type !== "trial_assessment"
     );
 
-    // Attach lightweight progress info for in-progress attempts
     const withProgress = filtered.map((a) => {
-      const totalQuestions = a.questions?.length || 0;
-      if (a.status === "in_progress") {
-        const answeredCount = a.answers
-          ? a.answers.filter((ans) => ans.selectedAnswer != null).length
-          : 0;
-        a.progress = {
-          current: a.currentIndex || 0,
-          answeredCount,
-          totalQuestions,
-          progressPercent:
-            totalQuestions > 0
-              ? Math.round((answeredCount / totalQuestions) * 100)
-              : 0,
-        };
+      // Format duration as "1hr 27m" or "35m"
+      const durationSecs = a.result?.duration;
+      if (durationSecs != null && durationSecs > 0) {
+        const totalMins = Math.round(durationSecs / 60);
+        const hrs = Math.floor(totalMins / 60);
+        const mins = totalMins % 60;
+        a.timeTaken = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}m` : ''}` : `${mins}m`;
+      } else {
+        a.timeTaken = null;
       }
       // Strip heavy arrays from response
       delete a.answers;
@@ -850,7 +898,7 @@ exports.getReviewerProgress = async (req, res, next) => {
       reviewer: reviewerId,
     })
       .select(
-        "status currentIndex answers questions result.percentage result.passed result.correct result.totalItems createdAt submittedAt remainingSeconds"
+        "status currentIndex answers questions result.percentage result.passed result.correct result.totalItems result.duration createdAt submittedAt remainingSeconds"
       )
       .sort({ createdAt: -1 })
       .lean();
@@ -907,14 +955,29 @@ exports.getReviewerProgress = async (req, res, next) => {
         bestScore,
         avgScore,
         passCount,
-        history: completed.map((a) => ({
-          attemptId: a._id,
-          percentage: a.result?.percentage || 0,
-          passed: a.result?.passed || false,
-          correct: a.result?.correct || 0,
-          totalItems: a.result?.totalItems || 0,
-          submittedAt: a.submittedAt,
-        })),
+        history: completed.map((a) => {
+          const durationSecs = a.result?.duration;
+          let timeTaken = null;
+          if (durationSecs != null && durationSecs > 0) {
+            const totalMins = Math.round(durationSecs / 60);
+            const hrs = Math.floor(totalMins / 60);
+            const mins = totalMins % 60;
+            timeTaken = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}m` : ""}` : `${mins}m`;
+          }
+          return {
+            _id: a._id,
+            status: a.status,
+            result: {
+              percentage: a.result?.percentage || 0,
+              passed: a.result?.passed || false,
+              correct: a.result?.correct || 0,
+              totalItems: a.result?.totalItems || 0,
+            },
+            timeTaken,
+            submittedAt: a.submittedAt,
+            createdAt: a.createdAt,
+          };
+        }),
       },
     });
   } catch (err) {
