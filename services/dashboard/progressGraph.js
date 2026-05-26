@@ -31,7 +31,7 @@ async function buildProgressGraph(userId, examLevel) {
     .reverse(); // oldest → newest for the chart
 
   if (mocks.length === 0) {
-    return { hasData: false, dataPoints: [], goalLine: Math.round(SAFE_ZONE * 100) };
+    return { hasData: false, dataPoints: [], goalLine: 80 };
   }
 
   const dataPoints = mocks.map((a) => {
@@ -47,7 +47,7 @@ async function buildProgressGraph(userId, examLevel) {
   return {
     hasData: true,
     dataPoints,
-    goalLine: Math.round(SAFE_ZONE * 100),
+    goalLine: 80,
   };
 }
 

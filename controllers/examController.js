@@ -845,12 +845,7 @@ exports.getUserAttempts = async (req, res, next) => {
       Attempt.countDocuments(filter),
     ]);
 
-    // Exclude trial_assessment attempts from history
-    const filtered = attempts.filter(
-      (a) => a.reviewer?.type !== "trial_assessment"
-    );
-
-    const withProgress = filtered.map((a) => {
+    const withProgress = attempts.map((a) => {
       // Format duration as "1hr 27m" or "35m"
       const durationSecs = a.result?.duration;
       if (durationSecs != null && durationSecs > 0) {
