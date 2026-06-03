@@ -84,6 +84,9 @@ exports.getUsers = async (req, res, next) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
     const search = (req.query.search || "").trim();
+    const plan = (req.query.plan || "").trim();
+    const status = (req.query.status || "").trim();
+    const premium = (req.query.premium || "").trim();
 
     const filter = { isAdmin: { $ne: true } };
 
@@ -93,6 +96,41 @@ exports.getUsers = async (req, res, next) => {
         { firstName: regex },
         { lastName: regex },
         { email: regex },
+      ];
+    }
+
+    // Subscription plan filter
+    const PLANS = ["free", "weekly", "monthly", "quarterly", "premium"];
+    if (PLANS.includes(plan)) {
+      filter["subscription.plan"] = plan;
+    }
+
+    // Account status filter
+    if (status === "active") {
+      filter.blocked = { $ne: true };
+    } else if (status === "blocked") {
+      filter.blocked = true;
+    }
+
+    // Has-premium filter: a paid plan that hasn't expired.
+    const now = new Date();
+    if (premium === "yes") {
+      filter["subscription.plan"] = filter["subscription.plan"]
+        ? filter["subscription.plan"]
+        : { $ne: "free" };
+      filter.$and = [
+        ...(filter.$and || []),
+        { $or: [{ "subscription.expiresAt": null }, { "subscription.expiresAt": { $gte: now } }] },
+      ];
+    } else if (premium === "no") {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { "subscription.plan": "free" },
+            { "subscription.expiresAt": { $ne: null, $lt: now } },
+          ],
+        },
       ];
     }
 
