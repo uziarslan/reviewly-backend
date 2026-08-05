@@ -6,6 +6,7 @@ const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
 const { cloudinary } = require("../cloudinary");
 const { generateRecommendations, populateRecommendationReviewers } = require("../utils/recommendations");
+const { normalizeAnswerMap, buildAtomicAnswerSet, applyAnswerMap } = require("../utils/examAnswers");
 
 // ─── helpers ──────────────────────────────────────
 
@@ -367,13 +368,13 @@ function formatAttemptForClient(attempt) {
 exports.saveAnswer = async (req, res, next) => {
   try {
     const { attemptId } = req.params;
-    const { questionIndex, selectedAnswer, remainingSeconds } = req.body;
+    const { remainingSeconds, currentIndex } = req.body;
 
     const attempt = await Attempt.findOne({
       _id: attemptId,
       user: req.user._id,
       status: "in_progress",
-    });
+    }).select("answers");
 
     if (!attempt) {
       return res
@@ -381,20 +382,28 @@ exports.saveAnswer = async (req, res, next) => {
         .json({ success: false, message: "Attempt not found or already submitted" });
     }
 
-    if (questionIndex < 0 || questionIndex >= attempt.answers.length) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid question index" });
+    const answerMap = normalizeAnswerMap(req.body, attempt.answers.length);
+    const answerIndices = Object.keys(answerMap).map(Number);
+    const update = buildAtomicAnswerSet(answerMap);
+    const nextCurrentIndex = Number.isInteger(currentIndex)
+      ? currentIndex
+      : answerIndices[answerIndices.length - 1];
+    if (Number.isInteger(nextCurrentIndex) && nextCurrentIndex >= 0 && nextCurrentIndex < attempt.answers.length) {
+      update.currentIndex = nextCurrentIndex;
+    }
+    if (Number.isFinite(remainingSeconds)) {
+      update.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
+      update.tickedAt = new Date();
     }
 
-    attempt.answers[questionIndex].selectedAnswer = selectedAnswer || null;
-    attempt.currentIndex = questionIndex;
-    attempt.markModified("answers");
-    if (Number.isFinite(remainingSeconds)) {
-      attempt.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
-      attempt.tickedAt = new Date();
+    const updated = await Attempt.findOneAndUpdate(
+      { _id: attemptId, user: req.user._id, status: "in_progress" },
+      { $set: update },
+      { new: false }
+    );
+    if (!updated) {
+      return res.status(409).json({ success: false, message: "Attempt was submitted while answers were saving" });
     }
-    await attempt.save();
 
     res.json({ success: true });
   } catch (err) {
@@ -434,17 +443,20 @@ exports.beaconSave = async (req, res) => {
       return res.status(404).json({ success: false, message: "Attempt not found or already submitted" });
     }
 
-    for (const [questionIndexStr, selectedAnswer] of Object.entries(answersMap)) {
-      const questionIndex = parseInt(questionIndexStr, 10);
-      if (Number.isNaN(questionIndex) || questionIndex < 0 || questionIndex >= attempt.answers.length) continue;
-      attempt.answers[questionIndex].selectedAnswer = selectedAnswer || null;
-    }
-    attempt.markModified("answers");
+    const normalizedAnswers = normalizeAnswerMap(
+      { answers: answersMap },
+      attempt.answers.length,
+      { ignoreInvalid: true }
+    );
+    const update = buildAtomicAnswerSet(normalizedAnswers);
     if (Number.isFinite(remainingSeconds)) {
-      attempt.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
-      attempt.tickedAt = new Date();
+      update.remainingSeconds = Math.max(0, Math.round(remainingSeconds));
+      update.tickedAt = new Date();
     }
-    await attempt.save();
+    await Attempt.findOneAndUpdate(
+      { _id: attemptId, user: userId, status: "in_progress" },
+      { $set: update }
+    );
 
     res.status(200).json({ success: true });
   } catch (err) {
@@ -500,14 +512,26 @@ exports.submitExam = async (req, res, next) => {
     const attempt = await Attempt.findOne({
       _id: attemptId,
       user: req.user._id,
-      status: "in_progress",
     }).populate("questions reviewer");
 
     if (!attempt) {
       return res
         .status(404)
-        .json({ success: false, message: "Attempt not found or already submitted" });
+        .json({ success: false, message: "Attempt not found" });
     }
+
+    // A retry after a lost response, timeout, double-click, or timer/manual race
+    // must return the result already committed in MongoDB.
+    if (attempt.status === "submitted" || attempt.status === "timed_out") {
+      return res.json({
+        success: true,
+        alreadySubmitted: true,
+        data: { attemptId: attempt._id, result: attempt.result },
+      });
+    }
+
+    const submittedAnswers = normalizeAnswerMap(req.body, attempt.answers.length);
+    applyAnswerMap(attempt.answers, submittedAnswers);
 
     console.log("[EXAM SUBMIT] attempt submit started", {
       attemptId: attempt._id?.toString(),
@@ -644,6 +668,8 @@ exports.submitExam = async (req, res, next) => {
           submittedAt: attempt.submittedAt,
           result: attempt.result,
           answers: attempt.answers,
+          remainingSeconds: attempt.remainingSeconds,
+          tickedAt: null,
         },
       },
       { new: true }
@@ -697,6 +723,11 @@ exports.submitExam = async (req, res, next) => {
       },
     });
   } catch (err) {
+    logger.error({
+      err,
+      attemptId: req.params?.attemptId,
+      userId: req.user?._id?.toString(),
+    }, "Exam submission failed");
     next(err);
   }
 };

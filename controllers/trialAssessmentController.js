@@ -4,6 +4,7 @@ const Question = require("../models/Question");
 const Attempt = require("../models/Attempt");
 const User = require("../models/User");
 const SprintPlan = require("../models/SprintPlan");
+const { normalizeAnswerMap, applyAnswerMap } = require("../utils/examAnswers");
 
 // ─── helpers (shared with examController) ────────
 
@@ -365,13 +366,12 @@ exports.submitTrialExam = async (req, res, next) => {
     const attempt = await Attempt.findOne({
       _id: attemptId,
       user: req.user._id,
-      status: "in_progress",
     }).populate("questions reviewer");
 
     if (!attempt) {
       return res.status(404).json({
         success: false,
-        message: "Attempt not found or already submitted",
+        message: "Attempt not found",
       });
     }
 
@@ -382,6 +382,18 @@ exports.submitTrialExam = async (req, res, next) => {
         message: "This endpoint is only for trial assessments",
       });
     }
+
+    if (attempt.status === "submitted" || attempt.status === "timed_out") {
+      await User.findByIdAndUpdate(req.user._id, { $set: { trialAssessment: true } });
+      return res.json({
+        success: true,
+        alreadySubmitted: true,
+        data: { attemptId: attempt._id, result: attempt.result },
+      });
+    }
+
+    const submittedAnswers = normalizeAnswerMap(req.body, attempt.answers.length);
+    applyAnswerMap(attempt.answers, submittedAnswers);
 
     // Grade each answer
     const questions = attempt.questions;
@@ -459,6 +471,8 @@ exports.submitTrialExam = async (req, res, next) => {
           status: "submitted",
           submittedAt: now,
           answers: attempt.answers,
+          remainingSeconds: attempt.remainingSeconds,
+          tickedAt: null,
           result: {
             totalItems,
             correct: totalCorrect,
@@ -527,6 +541,11 @@ exports.submitTrialExam = async (req, res, next) => {
       },
     });
   } catch (err) {
+    logger.error({
+      err,
+      attemptId: req.params?.attemptId,
+      userId: req.user?._id?.toString(),
+    }, "Trial assessment submission failed");
     next(err);
   }
 };

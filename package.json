@@ -8,6 +8,7 @@
     "start:compat": "node cluster.js",
     "start:worker": "node worker.js",
     "dev": "nodemon server.js",
+    "test": "node --test test",
     "seed:reviewers": "node seeds/seedReviewers.js",
     "seed:questions": "node seeds/seedQuestions.js",
     "seed:admin": "node seeds/seedAdmin.js",

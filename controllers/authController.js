@@ -13,6 +13,15 @@ const oauthClient = new OAuth2Client(
   "postmessage"
 );
 
+function setAuthCookie(res, token) {
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+}
+
 const PREMIUM_WEEKLY_EMAILS = new Set([
   "rubielabajo093@gmail.com",
   "edwardcuyos8022@gmail.com",
@@ -211,7 +220,12 @@ exports.googleCodeLogin = async (req, res, next) => {
  * Returns the currently authenticated user.
  */
 exports.getMe = async (req, res) => {
-  res.json({ success: true, user: req.user });
+  // Sliding renewal: a valid session is refreshed on application bootstrap.
+  // Protected pages render only after this call, so long exams begin with a
+  // newly issued token instead of one that may be minutes from expiration.
+  const token = generateToken(req.user._id);
+  setAuthCookie(res, token);
+  res.json({ success: true, user: req.user, token });
 };
 
 /**

@@ -15,6 +15,7 @@ const {
   getShareImage,
 } = require("../controllers/examController");
 const { protect } = require("../middleware/auth");
+const { examSubmitLimiter } = require("../middleware/rateLimit");
 
 // Public share endpoints (no auth)
 router.get("/shared/:shareToken", getSharedResult);
@@ -31,7 +32,7 @@ router.get("/attempts/:attemptId/review", protect, getAttemptReview);
 router.put("/attempts/:attemptId/answer", protect, saveAnswer);
 router.post("/attempts/:attemptId/beacon", beaconSave);
 router.put("/attempts/:attemptId/pause", protect, pauseExam);
-router.post("/attempts/:attemptId/submit", protect, submitExam);
+router.post("/attempts/:attemptId/submit", protect, examSubmitLimiter, submitExam);
 router.post("/attempts/:attemptId/share", protect, generateShareLink);
 router.post("/attempts/:attemptId/share-image", protect, uploadShareImage);
 

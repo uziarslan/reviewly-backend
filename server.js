@@ -190,8 +190,16 @@ app.get("/share/:shareToken", async (req, res) => {
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
 // ── Global error handler ────────────────────────
-app.use((err, _req, res, _next) => {
-  logger.error({ err, stack: err.stack }, "Unhandled error");
+app.use((err, req, res, _next) => {
+  logger.error({
+    err,
+    stack: err.stack,
+    method: req.method,
+    path: req.originalUrl,
+    userId: req.user?._id?.toString(),
+    attemptId: req.params?.attemptId,
+    statusCode: err.statusCode || 500,
+  }, "Unhandled error");
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || "Internal server error",

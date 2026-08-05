@@ -9,6 +9,7 @@ const {
   getTrialResult,
 } = require("../controllers/trialAssessmentController");
 const { protect } = require("../middleware/auth");
+const { examSubmitLimiter } = require("../middleware/rateLimit");
 const { saveAnswer, pauseExam, beaconSave } = require("../controllers/examController");
 
 // Beacon save (no auth — token in body)
@@ -32,7 +33,7 @@ router.put("/attempts/:attemptId/answer", saveAnswer);
 router.put("/attempts/:attemptId/pause", pauseExam);
 
 // Submit & abandon
-router.post("/attempts/:attemptId/submit", submitTrialExam);
+router.post("/attempts/:attemptId/submit", examSubmitLimiter, submitTrialExam);
 router.post("/attempts/:attemptId/abandon", abandonTrialExam);
 
 // Get result after submission
